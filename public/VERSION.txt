@@ -1,0 +1,4 @@
+ACCELARATE 2026 Multiplayer Bingo
+Latest backend rules: BINGO requires at least one complete horizontal row AND at least one complete vertical column. BLACKOUT remains all 24 attendee squares + automatic Free Space.
+Photo options: Take Photo or Choose from Photos.
+Visual/accessibility: original card palette, high-contrast text, semantic labels, focus indicators, larger touch targets.
