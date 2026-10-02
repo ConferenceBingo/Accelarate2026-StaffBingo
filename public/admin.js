@@ -106,33 +106,22 @@ async function viewBoard(playerId){
   openBoardPlayerId=playerId;
   try{
     toast('Loading player board…');
-    const data=await api('admin_player_board',{player_id:playerId,_refresh:Date.now()});
-    if(!data) throw new Error('Board data not found');
-    const defs=data.definitions||[];
-    const sq=data.squares||[];
-    const by=new Map(sq.map(x=>[x.square_index,x]));
+    const {data:player,error:pe}=await sb.from('players').select('id,display_name,card_id,game_id,joined_at,first_bingo_at,first_bingo_pattern,bingo_rejected,bingo_note,blackout_claimed_at,blackout_status,blackout_verified_at,blackout_note').eq('id',playerId).single();
+    if(pe)throw pe;
+    const [{data:card,error:ce},{data:defs,error:de},{data:sq,error:se}]=await Promise.all([
+      sb.from('cards').select('id,card_number').eq('id',player.card_id).single(),
+      sb.from('card_squares').select('square_index,attendee_name,organization,is_free').eq('card_id',player.card_id).order('square_index'),
+      sb.from('player_squares').select('square_index,completed,photo_path,completed_at,is_free').eq('player_id',playerId).order('square_index')
+    ]);
+    if(ce)throw ce;if(de)throw de;if(se)throw se;
+    const by=new Map((sq||[]).map(x=>[x.square_index,x]));
     const urls={};
-    for(const s of sq){
-      if(s.photo_path) urls[s.square_index]=await signedPhotoUrl(s.photo_path);
-    }
-    const completed=sq.filter(x=>x.completed && !x.is_free).length;
-    const bingo=data.player.first_bingo_at;
-    const blackout=data.player.blackout_status;
+    for(const x of sq||[]){if(x.photo_path) urls[x.square_index]=await signedPhotoUrl(x.photo_path)}
+    const completed=(sq||[]).filter(x=>x.completed&&!x.is_free).length;
     closeBoardModal();
-    openBoardPlayerId=playerId;
-    boardModal=document.createElement('div');
-    boardModal.className='modal';
-    boardModal.innerHTML=`<div class="modal-card board-modal-card" role="dialog" aria-modal="true" aria-labelledby="boardTitle">
-      <div class="row"><div class="grow"><h2 id="boardTitle">${esc(data.player.display_name)}</h2><p class="modal-subtitle">Card #${data.player.card_number} • ${completed}/24 completed</p></div><button class="btn btn-light" id="closeBoard">Close</button></div>
-      <div class="row" style="margin:10px 0 14px"><span class="pill ${bingo?'good':'warn'}">${bingo?'BINGO':'No Bingo'}</span><span class="pill ${blackout==='approved'?'good':blackout==='pending'?'warn':''}">${esc(blackout||'none').toUpperCase()}</span>${data.player.first_bingo_pattern?`<span class="small muted">${esc(data.player.first_bingo_pattern)}</span>`:''}</div>
-      <div class="board inspection-board">${Array.from({length:25},(_,i)=>{const d=defs.find(x=>x.square_index===i)||{};const x=by.get(i)||{};const u=urls[i];return `<div class="inspect-cell ${d.is_free?'free':x.completed?'done':'not-done'}">${u?`<img src="${u}" alt="Selfie with ${esc(d.attendee_name||'attendee')}">`:''}<div class="inspect-overlay"><b>${d.is_free?'FREE SPACE':esc(d.attendee_name||'')}</b>${d.organization?`<span>${esc(d.organization)}</span>`:''}<em>${d.is_free?'Automatic':x.completed?`✓ ${fmt(x.completed_at)}`:'Not completed'}</em></div></div>`}).join('')}</div>
-      <p class="board-help">Completed squares show the submitted selfie. Click a photo to view it larger.</p>
-      <div style="height:10px"></div><div class="row"><span class="small muted">Joined: ${fmt(data.player.joined_at)}</span>${data.player.blackout_claimed_at?`<span class="small muted">Blackout claimed: ${fmt(data.player.blackout_claimed_at)}</span>`:''}</div>
-    </div>`;
-    document.body.appendChild(boardModal);
-    document.getElementById('closeBoard').onclick=closeBoardModal;
-    boardModal.addEventListener('click',e=>{if(e.target===boardModal)closeBoardModal();});
-    boardModal.querySelectorAll('.inspect-cell img').forEach(img=>img.onclick=()=>showPhoto(img.src,img.alt));
+    boardModal=document.createElement('div');boardModal.className='modal';
+    boardModal.innerHTML=`<div class="modal-card board-modal-card" role="dialog" aria-modal="true" aria-labelledby="boardTitle"><div class="row"><div class="grow"><h2 id="boardTitle">${esc(player.display_name)}</h2><p class="modal-subtitle">Card #${card.card_number} • ${completed}/24 completed</p></div><button class="btn btn-light" id="closeBoard">Close</button></div><div class="row" style="margin:10px 0 14px"><span class="pill ${player.first_bingo_at?'good':'warn'}">${player.first_bingo_at?'BINGO':'No Bingo'}</span><span class="pill ${player.blackout_status==='approved'?'good':player.blackout_status==='pending'?'warn':''}">${esc(player.blackout_status||'none').toUpperCase()}</span>${player.first_bingo_pattern?`<span class="small muted">${esc(player.first_bingo_pattern)}</span>`:''}</div><div class="board inspection-board">${Array.from({length:25},(_,i)=>{const d=(defs||[]).find(x=>x.square_index===i)||{};const x=by.get(i)||{};const u=urls[i];return `<div class="inspect-cell ${d.is_free?'free':x.completed?'done':'not-done'}">${u?`<img src="${u}" alt="Selfie with ${esc(d.attendee_name||'attendee')}">`:''}<div class="inspect-overlay"><b>${d.is_free?'FREE SPACE':esc(d.attendee_name||'')}</b>${d.organization?`<span>${esc(d.organization)}</span>`:''}<em>${d.is_free?'Automatic':x.completed?`✓ ${fmt(x.completed_at)}`:'Not completed'}</em></div></div>`}).join('')}</div><p class="board-help">Completed squares show the submitted selfie. Click a photo to view it larger.</p><div style="height:10px"></div><div class="row"><span class="small muted">Joined: ${fmt(player.joined_at)}</span>${player.blackout_claimed_at?`<span class="small muted">Blackout claimed: ${fmt(player.blackout_claimed_at)}</span>`:''}</div></div>`;
+    document.body.appendChild(boardModal);document.getElementById('closeBoard').onclick=closeBoardModal;boardModal.addEventListener('click',e=>{if(e.target===boardModal)closeBoardModal()});boardModal.querySelectorAll('.inspect-cell img').forEach(img=>img.onclick=()=>showPhoto(img.src,img.alt));
   }catch(e){toast(apiErrorMessage(e));}
 }
 
@@ -221,7 +210,8 @@ async function verifyBingo(id,rejected){
     if(!note){toast('Please enter a message explaining why the Bingo was not accepted.');return;}
   }
   try{
-    await api('verify_bingo',{player_id:id,rejected,note});
+    const {data,error}=await sb.rpc('admin_verify_bingo',{p_player_id:id,p_rejected:rejected,p_note:note});
+    if(error)throw error;
     toast(rejected?'Bingo rejected. The player will be notified.':'Bingo approved — status is now Approved.');
     await load();
   }catch(e){toast(apiErrorMessage(e))}
@@ -270,11 +260,31 @@ async function control(id){
 }
 function esc(s){return String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
 
+async function loadAdminSnapshotDirect(){
+  const {data:game,error:ge}=await sb.from('games').select('*').eq('slug','accelarate-2026').single(); if(ge)throw ge;
+  const {data:players,error:pe}=await sb.from('players').select('id,display_name,card_id,joined_at,first_bingo_at,first_bingo_pattern,bingo_rejected,bingo_note,blackout_claimed_at,blackout_status,blackout_verified_at,blackout_note').eq('game_id',game.id).order('joined_at',{ascending:true}); if(pe)throw pe;
+  const ids=(players||[]).map(x=>x.id), cardIds=[...new Set((players||[]).map(x=>x.card_id))];
+  const [{data:cards,error:ce},{data:squares,error:se},{data:defs,error:de},{data:events,error:ee}]=await Promise.all([
+    sb.from('cards').select('id,card_number').in('id',cardIds.length?cardIds:['00000000-0000-0000-0000-000000000000']),
+    ids.length?sb.from('player_squares').select('player_id,square_index,completed,photo_path,completed_at,is_free').in('player_id',ids):Promise.resolve({data:[],error:null}),
+    cardIds.length?sb.from('card_squares').select('card_id,square_index,attendee_name,organization,is_free').in('card_id',cardIds):Promise.resolve({data:[],error:null}),
+    ids.length?sb.from('game_events').select('player_id,event_type,created_at').eq('game_id',game.id).in('player_id',ids).in('event_type',['bingo','bingo_rejected','bingo_approved','bingo_reinstated','bingo_restored']).order('created_at',{ascending:true}):Promise.resolve({data:[],error:null})
+  ]);
+  if(ce)throw ce;if(se)throw se;if(de)throw de;if(ee)throw ee;
+  const cardMap=new Map((cards||[]).map(x=>[x.id,x.card_number]));
+  const byPlayer=new Map();for(const x of squares||[]){if(!byPlayer.has(x.player_id))byPlayer.set(x.player_id,[]);byPlayer.get(x.player_id).push(x)}
+  const byCard=new Map();for(const x of defs||[]){if(!byCard.has(x.card_id))byCard.set(x.card_id,[]);byCard.get(x.card_id).push(x)}
+  const bs=new Map(),ba=new Map();for(const e of events||[]){if(e.event_type==='bingo_approved'||e.event_type==='bingo_reinstated'){bs.set(e.player_id,'Approved');ba.set(e.player_id,e.created_at)}else if(e.event_type==='bingo_rejected')bs.set(e.player_id,'Rejected');else if(e.event_type==='bingo'||e.event_type==='bingo_restored')bs.set(e.player_id,'Submitted')}
+  const verification=[];
+  for(const p of (players||[]).filter(x=>x.blackout_status==='pending').sort((a,b)=>new Date(a.blackout_claimed_at)-new Date(b.blackout_claimed_at))){const ps=byPlayer.get(p.id)||[];const urls={};for(const x of ps.filter(x=>x.photo_path)){const u=await signedPhotoUrl(x.photo_path);if(u)urls[x.square_index]=u}verification.push({player:{...p,card_number:cardMap.get(p.card_id)},definitions:byCard.get(p.card_id)||[],squares:ps,signedPhotoUrls:urls})}
+  return {game,players:(players||[]).map(p=>({...p,card_number:cardMap.get(p.card_id),completedCount:(byPlayer.get(p.id)||[]).filter(x=>x.completed&&!x.is_free).length,bingo_status:p.first_bingo_at?(bs.get(p.id)||'Submitted'):'Pending',bingo_approved_at:ba.get(p.id)||null,blackout_status_public:p.blackout_claimed_at?(p.blackout_status==='approved'?'Approved':p.blackout_status==='rejected'?'Rejected':'Submitted'):'Pending'})),verification};
+}
+
 async function load({afterLogin=false}={}){
   if(loading) return false;
   loading=true;
   try{
-    snapshot=await api('admin_snapshot',{_refresh:Date.now()});
+    snapshot=await loadAdminSnapshotDirect();
     authReady=true;
     render();
     startDashboardAutoRefresh();

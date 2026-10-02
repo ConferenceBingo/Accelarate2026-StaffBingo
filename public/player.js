@@ -73,7 +73,9 @@ async function loadState(){
   if(!id)return false;
   try{
     await ensureSession({refresh:true});
-    state=await api('player_state',{player_id:id});
+    const {data,error}=await sb.rpc('player_state',{p_player_id:id});
+    if(error) throw error;
+    state=data;
     await syncCanonicalGameStatus();
     return true;
   }catch(e){
@@ -111,7 +113,8 @@ function subscribeToPlayer(){
 }
 
 function intro(){root.innerHTML=`<section class="panel"><h2>Join the game</h2><p class="muted">Enter your name. You’ll receive one of the five official ACCELARATE cards.</p><label class="sr-only" for="name">Your name</label><input id="name" class="input" maxlength="80" placeholder="Your name" autocomplete="name"><div style="height:10px"></div><button id="join" class="btn btn-primary">Start My Bingo</button><div style="height:12px"></div><div class="notice small">Your game session is saved on this phone. You do not need an email or account.</div></section>`;document.getElementById('join').onclick=join;document.getElementById('name').addEventListener('keydown',e=>{if(e.key==='Enter')join()})}
-async function join(){const name=document.getElementById('name').value.trim();if(!name)return toast('Enter your name first.');const b=document.getElementById('join');b.disabled=true;b.textContent='Joining…';try{const j=await api('join',{player_name:name});localStorage.setItem('acc_player_id',j.player_id);await loadState();render()}catch(e){toast(e.message);b.disabled=false;b.textContent='Start My Bingo'}}
+async function join(){const name=document.getElementById('name').value.trim();if(!name)return toast('Enter your name first.');const b=document.getElementById('join');b.disabled=true;b.textContent='Joining…';try{const {data:j,error}=await sb.rpc('join_game',{p_player_name:name});
+    if(error) throw error;localStorage.setItem('acc_player_id',j.player_id);await loadState();render()}catch(e){toast(e.message);b.disabled=false;b.textContent='Start My Bingo'}}
 
 function render(){
   if(!state){intro();return}
@@ -241,20 +244,9 @@ async function loadLeaderboard(){
   const el=document.getElementById('leaderboard');
   if(!el)return;
   try{
-    // Use the authenticated leaderboard action that is present in every
-    // deployed version of game-api. The player already has an authenticated
-    // session, so this avoids a separate unauthenticated public action that
-    // can fail with "Authentication required" when an older Edge Function is
-    // still deployed.
-    // Force a fresh server read on every poll. The leaderboard is intentionally
-    // computed server-side from the current players/events tables, so no stale
-    // browser or intermediary response can make the standings appear frozen.
-    const rows=await api('leaderboard',{_refresh:Date.now()});
-    const list=(Array.isArray(rows)?rows:[]).map(r=>{
-      const bingo = r.bingo_status || (r.first_bingo_at ? (r.bingo_rejected ? 'rejected' : 'submitted') : 'pending');
-      const blackout = r.blackout_status_public || (r.blackout_claimed_at ? (r.blackout_status==='approved' ? 'approved' : r.blackout_status==='rejected' ? 'rejected' : 'submitted') : 'pending');
-      return {...r,bingo_status:bingo,blackout_status_public:blackout};
-    });
+    const {data,error}=await sb.rpc('public_leaderboard');
+    if(error)throw error;
+    const list=Array.isArray(data)?data:[];
     const statusPill=(status)=>{
       const cls=status==='approved'?'good':status==='rejected'?'bad':status==='submitted'?'submitted':'pending';
       const label=status==='approved'?'Approved':status==='rejected'?'Rejected':status==='submitted'?'Submitted':'Pending';
@@ -266,4 +258,5 @@ async function loadLeaderboard(){
     el.innerHTML=`<div class="notice">Leaderboard temporarily unavailable. Retrying automatically…<div class="small" style="margin-top:6px">${escape(e.message||'Unknown error')}</div></div>`;
   }
 }
-(async()=>{try{await ensureSession();if(await loadState()){render()}else intro()}catch(e){root.innerHTML=`<section class="panel danger">Unable to start the game: ${escape(e.message)}</section>`}})();
+
+(async()=>{try{await ensureSession();if(await loadState()){render()}else intro()}catch(e){localStorage.removeItem('acc_player_id');intro();toast(`Unable to restore the saved session: ${e.message||e}. Please re-enter your name.`)}})();
