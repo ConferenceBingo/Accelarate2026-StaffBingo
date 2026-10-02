@@ -41,7 +41,30 @@ async function api(action,payload={}){
   return j;
 }
 async function getPhotoUrl(path){if(!path)return null;const {data,error}=await sb.storage.from('selfies').createSignedUrl(path,3600);return error?null:data?.signedUrl||null}
-async function loadState(){const id=localStorage.getItem('acc_player_id');if(!id)return false;try{await ensureSession({refresh:true});state=await api('player_state',{player_id:id});return true}catch(e){toast(e.message);return false}}
+
+// Read the canonical game status directly from Supabase. This prevents an older
+// Edge Function deployment from making the player page appear stuck in PAUSED.
+async function getCanonicalGameStatus(){
+  const s=await ensureSession({refresh:true});
+  const url=`${cfg.SUPABASE_URL}/rest/v1/games?slug=eq.accelarate-2026&select=status,updated_at`;
+  const r=await fetch(url,{headers:{'apikey':cfg.SUPABASE_PUBLISHABLE_KEY,'Authorization':`Bearer ${s.access_token}`}});
+  let j=null;try{j=await r.json()}catch{}
+  if(!r.ok) throw new Error(typeof j?.message==='string'?j.message:`Unable to read game status (${r.status})`);
+  const row=Array.isArray(j)?j[0]:null;
+  if(!row?.status) throw new Error('Game status could not be read. Tap Refresh and try again.');
+  return row.status;
+}
+
+async function syncCanonicalGameStatus(){
+  if(!state)return false;
+  try{
+    state.game_status=await getCanonicalGameStatus();
+    return true;
+  }catch(e){
+    return false;
+  }
+}
+async function loadState(){const id=localStorage.getItem('acc_player_id');if(!id)return false;try{await ensureSession({refresh:true});state=await api('player_state',{player_id:id});await syncCanonicalGameStatus();return true}catch(e){toast(e.message);return false}}
 function subscribeToPlayer(){
   if(playerChannel){sb.removeChannel(playerChannel);playerChannel=null}
   const id=state?.player?.id;if(!id)return;
@@ -127,6 +150,7 @@ async function saveSelectedPhoto(){
     // the game, stop here so the browser never attempts an RLS-protected upload that cannot be recorded.
     await loadState();
     if(!state){throw new Error('Your game session could not be restored. Tap Refresh and try again.')}
+    await syncCanonicalGameStatus();
     if(state.game_status!=='open'){
       closePhotoChooser();
       render();
