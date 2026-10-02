@@ -170,17 +170,19 @@ function statusPill(status){const s=String(status||'').toLowerCase();if(s==='app
 function renderLiveLeaderboard(rows){return `<table class="leader"><thead><tr><th>Player</th><th>Card</th><th>Bingo</th><th>Blackout</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${esc(r.display_name)}</td><td>${esc(r.card_number)}</td><td>${statusPill(r.bingo_status)}</td><td>${statusPill(r.blackout_status_public)}</td></tr>`).join('')||'<tr><td colspan="4">No players yet.</td></tr>'}</tbody></table>`}
 async function loadAdminLeaderboard(){
   const el=document.getElementById('adminLeaderboard');
-  if(!el||leaderboardLoading)return;
+  if(!el || leaderboardLoading)return;
   leaderboardLoading=true;
   try{
-    const r=await fetch(`${cfg.SUPABASE_URL}/functions/v1/game-api`,{
-      method:'POST',
-      headers:{'Content-Type':'application/json','apikey':cfg.SUPABASE_PUBLISHABLE_KEY},
-      body:JSON.stringify({action:'public_leaderboard'})
-    });
-    let j=null;try{j=await r.json()}catch{}
-    if(!r.ok||j?.error)throw new Error(typeof j?.error==='string'?j.error:j?.error?.message||`Leaderboard request failed (${r.status})`);
-    const rows=Array.isArray(j)?j:[];
+    // Use the authenticated leaderboard action already supported by game-api.
+    // This keeps Admin compatible with both the current and previously
+    // deployed Edge Function versions and avoids the public action's auth
+    // mismatch.
+    const raw=await api('leaderboard');
+    const rows=(Array.isArray(raw)?raw:[]).map(r=>({
+      ...r,
+      bingo_status:r.bingo_status || (r.first_bingo_at ? (r.bingo_rejected ? 'rejected' : 'submitted') : 'pending'),
+      blackout_status_public:r.blackout_status_public || (r.blackout_claimed_at ? (r.blackout_status==='approved' ? 'approved' : r.blackout_status==='rejected' ? 'rejected' : 'submitted') : 'pending')
+    }));
     el.innerHTML=`<div class="small muted" style="margin-bottom:6px">Live standings • updates automatically</div>${renderLiveLeaderboard(rows)}`;
   }catch(e){
     console.error('Admin leaderboard refresh failed:',e);

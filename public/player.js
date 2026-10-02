@@ -213,17 +213,17 @@ async function loadLeaderboard(){
   const el=document.getElementById('leaderboard');
   if(!el)return;
   try{
-    // The public leaderboard is intentionally read through a public Edge
-    // Function action so a stale/expired player session cannot prevent the
-    // leaderboard from loading. Only non-sensitive public standings are returned.
-    const r=await fetch(`${cfg.SUPABASE_URL}/functions/v1/game-api`,{
-      method:'POST',
-      headers:{'Content-Type':'application/json','apikey':cfg.SUPABASE_PUBLISHABLE_KEY},
-      body:JSON.stringify({action:'public_leaderboard'})
+    // Use the authenticated leaderboard action that is present in every
+    // deployed version of game-api. The player already has an authenticated
+    // session, so this avoids a separate unauthenticated public action that
+    // can fail with "Authentication required" when an older Edge Function is
+    // still deployed.
+    const rows=await api('leaderboard');
+    const list=(Array.isArray(rows)?rows:[]).map(r=>{
+      const bingo = r.bingo_status || (r.first_bingo_at ? (r.bingo_rejected ? 'rejected' : 'submitted') : 'pending');
+      const blackout = r.blackout_status_public || (r.blackout_claimed_at ? (r.blackout_status==='approved' ? 'approved' : r.blackout_status==='rejected' ? 'rejected' : 'submitted') : 'pending');
+      return {...r,bingo_status:bingo,blackout_status_public:blackout};
     });
-    let j=null;try{j=await r.json()}catch{}
-    if(!r.ok||j?.error)throw new Error(typeof j?.error==='string'?j.error:j?.error?.message||`Leaderboard request failed (${r.status})`);
-    const list=Array.isArray(j)?j:[];
     const statusPill=(status)=>{
       const cls=status==='approved'?'good':status==='rejected'?'bad':status==='submitted'?'submitted':'pending';
       const label=status==='approved'?'Approved':status==='rejected'?'Rejected':status==='submitted'?'Submitted':'Pending';
