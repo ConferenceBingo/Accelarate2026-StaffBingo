@@ -225,14 +225,18 @@ async function verifyBingo(id,rejected){
 }
 async function restoreBingo(id){
   try{
-    await api('admin_restore_bingo',{player_id:id});
+    const {data,error}=await sb.rpc('admin_restore_bingo',{p_player_id:id});
+    if(error) throw error;
+    if(data?.error) throw new Error(data.error);
     toast('Bingo restored to Submitted. Both decisions are available again.');
     await load();
   }catch(e){toast(apiErrorMessage(e))}
 }
 async function restoreBlackout(id){
   try{
-    await api('admin_restore_blackout',{player_id:id});
+    const {data,error}=await sb.rpc('admin_restore_blackout',{p_player_id:id});
+    if(error) throw error;
+    if(data?.error) throw new Error(data.error);
     toast('Blackout restored to Submitted. Both decisions are available again.');
     await load();
   }catch(e){toast(apiErrorMessage(e))}

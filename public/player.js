@@ -192,7 +192,9 @@ async function resubmitBingo(){
   if(state.game_status!=='open'){toast('The game is currently closed/paused. Tap Refresh after the organizer reopens it.');return}
   if(!window.confirm('Submit your current board for Bingo verification again? The new submission will receive a new server timestamp.'))return;
   try{
-    const data=await api('player_resubmit_bingo',{player_id:state.player.id});
+    const {data,error}=await sb.rpc('player_resubmit_bingo',{p_player_id:state.player.id});
+    if(error) throw error;
+    if(data?.error) throw new Error(data.error);
     await loadState();render();toast(`🎉 Bingo resubmitted — ${data.bingo_pattern||state.player.first_bingo_pattern||'Row + Column'}`);
   }catch(e){toast(e.message||'Unable to resubmit Bingo.')}
 }
@@ -202,7 +204,9 @@ async function resubmitBlackout(){
   if(state.game_status!=='open'){toast('The game is currently closed/paused. Tap Refresh after the organizer reopens it.');return}
   if(!window.confirm('Submit your current completed board for Blackout verification again? The new submission will receive a new server timestamp.'))return;
   try{
-    await api('player_resubmit_blackout',{player_id:state.player.id});
+    const {data,error}=await sb.rpc('player_resubmit_blackout',{p_player_id:state.player.id});
+    if(error) throw error;
+    if(data?.error) throw new Error(data.error);
     await loadState();render();toast('👑 Blackout resubmitted for organizer verification.');
   }catch(e){toast(e.message||'Unable to resubmit Blackout.')}
 }
