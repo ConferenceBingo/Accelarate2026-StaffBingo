@@ -3,7 +3,6 @@ const sb=supabase.createClient(cfg.SUPABASE_URL,cfg.SUPABASE_PUBLISHABLE_KEY,{au
 const root=document.getElementById('root');
 const toastEl=document.getElementById('toast');
 let snapshot=null;
-let refreshTimer=null;
 let loading=false;
 let authReady=false;
 let boardModal=null;
@@ -12,17 +11,6 @@ function toast(m){
   toastEl.textContent=m;
   toastEl.classList.remove('hidden');
   setTimeout(()=>toastEl.classList.add('hidden'),3500);
-}
-
-function clearRefreshTimer(){
-  if(refreshTimer){clearInterval(refreshTimer);refreshTimer=null;}
-}
-
-function startRefreshTimer(){
-  clearRefreshTimer();
-  refreshTimer=setInterval(()=>{
-    if(document.visibilityState==='visible' && authReady && !loading) load({fromTimer:true});
-  },5000);
 }
 
 function apiErrorMessage(error){
@@ -56,7 +44,6 @@ async function api(action,payload={}){
 }
 
 function login(message=''){
-  clearRefreshTimer();
   authReady=false;
   root.innerHTML=`<section class="panel">
     <h2>Organizer sign in</h2>
@@ -86,11 +73,9 @@ function login(message=''){
 
       // Do not replace the login form until the authenticated admin snapshot succeeds.
       authReady=true;
-      const ok=await load({afterLogin:true});
-      if(ok) startRefreshTimer();
+      await load({afterLogin:true});
     }catch(e){
       authReady=false;
-      clearRefreshTimer();
       const msg=apiErrorMessage(e);
       toast(msg);
       login(msg);
@@ -161,7 +146,6 @@ async function resetGame(){
   try{
     const {data,error}=await sb.rpc('admin_reset_game');
     if(error) throw error;
-    clearRefreshTimer();
     toast(`Game reset. ${data?.players_removed??p.length} player(s) removed.`);
     await load();
   }catch(e){toast(apiErrorMessage(e));}
@@ -175,27 +159,38 @@ function render(){
   const winner=approved[0]||null;
   root.innerHTML=`<section class="panel">${winner?`<div class="panel success" style="margin:0 0 12px;padding:14px"><b>👑 BLACKOUT GRAND PRIZE WINNER</b><div class="small">${esc(winner.display_name)} • Card #${winner.card_number} • verified ${fmt(winner.blackout_verified_at)}</div><div class="small">The first approved Blackout is locked as the Grand Prize winner. Later Blackout claims remain recorded but cannot replace the verified winner.</div></div>`:''}<div class="notice" style="margin-bottom:12px"><b>🎯 Competition rules:</b> BINGO = <strong>one full horizontal row AND one full vertical column</strong>. BLACKOUT = <strong>all 24 attendee squares</strong>; Free Space is automatic.</div><div class="row"><div class="grow"><b>Game status:</b> <span class="pill ${snapshot.game.status==='open'?'good':'warn'}">${snapshot.game.status.toUpperCase()}</span></div><button class="btn btn-light" id="reload">Refresh</button><button class="btn btn-light" id="logout">Sign out</button></div><div style="height:12px"></div><div class="stats"><div class="stat"><span class="muted">Players</span><b>${p.length}</b></div><div class="stat"><span class="muted">Bingos</span><b>${bingos.length}</b></div><div class="stat"><span class="muted">Blackout claims</span><b>${p.filter(x=>x.blackout_claimed_at).length}</b></div><div class="stat"><span class="muted">Verified</span><b>${approved.length}</b></div></div><div style="height:12px"></div><div class="row"><button class="btn btn-gold" id="open">Open Game</button><button class="btn btn-light" id="pause">Pause</button><button class="btn btn-danger" id="close">Close</button><button class="btn btn-danger" id="resetGame">↻ Reset Game</button></div></section><section class="panel"><h2>📋 Player Boards</h2><p class="muted">Open any player's board to inspect every completed square and view the submitted selfies.</p>${tablePlayers(p)}</section><div class="admin-grid"><section class="panel"><h2>👑 Blackout Verification</h2>${pending.length?pending.map(renderVerification).join(''):`<div class="notice">No pending Blackout claims.</div>`}</section><section><section class="panel"><h2>🏆 Bingo Race</h2>${tableBingo(bingos)}</section><section class="panel"><h2>👑 Blackout Race</h2>${tableBlackout(p)}</section></section></div>`;
   document.getElementById('reload').onclick=()=>load();
-  document.getElementById('logout').onclick=async()=>{clearRefreshTimer();authReady=false;await sb.auth.signOut();login()};document.getElementById('resetGame').onclick=resetGame;
+  document.getElementById('logout').onclick=async()=>{authReady=false;await sb.auth.signOut();login()};document.getElementById('resetGame').onclick=resetGame;
   for(const id of ['open','pause','close'])document.getElementById(id).onclick=()=>control(id);
-  document.querySelectorAll('[data-verify]').forEach(b=>b.onclick=()=>verify(b.dataset.verify,b.dataset.approved==='true'));document.querySelectorAll('[data-board]').forEach(b=>b.onclick=()=>viewBoard(b.dataset.board));
+  document.querySelectorAll('[data-verify]').forEach(b=>b.onclick=()=>verify(b.dataset.verify,b.dataset.approved==='true'));document.querySelectorAll('[data-bingo]').forEach(b=>b.onclick=()=>verifyBingo(b.dataset.bingo,b.dataset.rejected==='true'));document.querySelectorAll('[data-board]').forEach(b=>b.onclick=()=>viewBoard(b.dataset.board));
 }
 
-function tablePlayers(rows){return `<table class="leader"><thead><tr><th>Player</th><th>Card</th><th>Progress</th><th>Bingo</th><th>Blackout</th><th></th></tr></thead><tbody>${rows.map(r=>`<tr><td>${esc(r.display_name)}</td><td>${r.card_number}</td><td>${r.completedCount??'—'} / 24</td><td>${r.first_bingo_at?fmt(r.first_bingo_at):'—'}</td><td>${esc(r.blackout_status||'none')}</td><td><button class="btn btn-light" data-board="${r.id}">View Board</button></td></tr>`).join('')||'<tr><td colspan="6">No players yet.</td></tr>'}</tbody></table>`}
-function tableBingo(rows){return `<table class="leader"><thead><tr><th>#</th><th>Player</th><th>Card</th><th>Time</th><th>Pattern</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.display_name)}</td><td>${r.card_number}</td><td>${fmt(r.first_bingo_at)}</td><td>${esc(r.first_bingo_pattern||'')}</td></tr>`).join('')||'<tr><td colspan="5">No Bingo yet.</td></tr>'}</tbody></table>`}
+function tablePlayers(rows){return `<table class="leader"><thead><tr><th>Player</th><th>Card</th><th>Progress</th><th>Bingo</th><th>Blackout</th><th></th></tr></thead><tbody>${rows.map(r=>`<tr><td>${esc(r.display_name)}</td><td>${r.card_number}</td><td>${r.completedCount??'—'} / 24</td><td>${r.first_bingo_at?(r.bingo_rejected?'<span class="pill" style="background:#fdecec;color:#8b1e1e">Rejected</span> '+fmt(r.first_bingo_at):fmt(r.first_bingo_at)):'—'}</td><td>${esc(r.blackout_status||'none')}</td><td><button class="btn btn-light" data-board="${r.id}">View Board</button></td></tr>`).join('')||'<tr><td colspan="6">No players yet.</td></tr>'}</tbody></table>`}
+function tableBingo(rows){return `<table class="leader"><thead><tr><th>#</th><th>Player</th><th>Card</th><th>Time</th><th>Pattern</th><th>Status</th><th></th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.display_name)}</td><td>${r.card_number}</td><td>${fmt(r.first_bingo_at)}</td><td>${esc(r.first_bingo_pattern||'')}</td><td>${r.bingo_rejected?'<span class="pill" style="background:#fdecec;color:#8b1e1e">Rejected</span>':'<span class="pill good">Active</span>'}</td><td><button class="btn ${r.bingo_rejected?'btn-light':'btn-danger'}" data-bingo="${r.id}" data-rejected="${r.bingo_rejected?'false':'true'}">${r.bingo_rejected?'Restore':'Reject Bingo'}</button></td></tr>`).join('')||'<tr><td colspan="7">No Bingo yet.</td></tr>'}</tbody></table>`}
 function tableBlackout(rows){const claims=rows.filter(r=>r.blackout_claimed_at).sort((a,b)=>new Date(a.blackout_claimed_at)-new Date(b.blackout_claimed_at));return `<table class="leader"><thead><tr><th>#</th><th>Player</th><th>Claim</th><th>Status</th></tr></thead><tbody>${claims.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.display_name)}</td><td>${fmt(r.blackout_claimed_at)}</td><td>${r.blackout_status}</td></tr>`).join('')||'<tr><td colspan="4">No Blackout claims yet.</td></tr>'}</tbody></table>`}
 function renderVerification(v){const defs=v.definitions||[];const sq=v.squares||[];const by=new Map(sq.map(x=>[x.square_index,x]));return `<article class="verify-card"><div class="row"><div class="grow"><b>${esc(v.player.display_name)}</b><div class="muted">Card #${v.player.card_number} • Claimed ${fmt(v.player.blackout_claimed_at)}</div></div><span class="pill warn">PENDING</span></div><div class="verify-board">${Array.from({length:25},(_,i)=>{const d=defs.find(x=>x.square_index===i);const s=by.get(i);const u=v.signedPhotoUrls?.[i];return d?.is_free?`<div class="empty" style="display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800">FREE</div>`:(u?`<img src="${u}" alt="${esc(d?.attendee_name)}">`:`<div class="empty" title="${esc(d?.attendee_name)}"></div>`)}).join('')}</div><div style="height:10px"></div><div class="small muted">Verification requires all 24 attendee squares to have valid selfies. The claim time is server-recorded.</div><div style="height:10px"></div><div class="row"><button class="btn btn-gold" data-verify="${v.player.id}" data-approved="true">✓ Approve Blackout</button><button class="btn btn-danger" data-verify="${v.player.id}" data-approved="false">Reject / Review</button></div></article>`}
+async function verifyBingo(id,rejected){
+  let note=null;
+  if(rejected){
+    note=prompt('Optional note for the player explaining why the Bingo submission was not accepted:');
+    if(note===null)return;
+  }
+  try{
+    await api('verify_bingo',{player_id:id,rejected,note});
+    toast(rejected?'Bingo rejected. The player will be notified.':'Bingo restored.');
+    await load();
+  }catch(e){toast(apiErrorMessage(e))}
+}
 async function verify(id,approved){const note=approved?'Verified by organizer':'Organizer rejected/reviewed claim';try{await api('verify_blackout',{player_id:id,approved,note});toast(approved?'Blackout verified.':'Blackout rejected.');await load()}catch(e){toast(apiErrorMessage(e))}}
 async function control(id){const command=id==='open'?'open':id==='pause'?'pause':'close';try{await api('game_control',{command});toast(`Game ${command}ed.`);await load()}catch(e){toast(apiErrorMessage(e))}}
 function esc(s){return String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
 
-async function load({afterLogin=false,fromTimer=false}={}){
+async function load({afterLogin=false}={}){
   if(loading) return false;
   loading=true;
   try{
     snapshot=await api('admin_snapshot');
     authReady=true;
     render();
-    if(!fromTimer) startRefreshTimer();
     return true;
   }catch(e){
     const msg=apiErrorMessage(e);
@@ -204,17 +199,12 @@ async function load({afterLogin=false,fromTimer=false}={}){
     // Only return to the login form when there is genuinely no session.
     const {data}=await sb.auth.getSession();
     if(!data.session){
-      clearRefreshTimer();
       authReady=false;
       login(msg==='Please sign in'?'':msg);
     }else if(afterLogin){
       // Keep the login form stable if authentication succeeded but admin authorization/API failed.
-      clearRefreshTimer();
       authReady=false;
       login(`Sign-in succeeded, but the organizer dashboard could not be loaded: ${msg}`);
-    }else if(fromTimer){
-      // Do not destroy the dashboard or recreate the login form because of a transient API error.
-      toast(msg);
     }else{
       toast(msg);
     }
@@ -226,7 +216,6 @@ async function load({afterLogin=false,fromTimer=false}={}){
 
 sb.auth.onAuthStateChange((event,session)=>{
   if(event==='SIGNED_OUT' || !session){
-    clearRefreshTimer();
     authReady=false;
     login();
   }

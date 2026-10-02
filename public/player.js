@@ -2,16 +2,63 @@ const cfg=window.ACCELARATE_CONFIG;
 const sb=supabase.createClient(cfg.SUPABASE_URL,cfg.SUPABASE_PUBLISHABLE_KEY,{auth:{persistSession:true,autoRefreshToken:true}});
 const root=document.getElementById('root');
 const toastEl=document.getElementById('toast');
-let session=null,state=null,uploading=false,selectedFile=null,selectedIndex=null;
+let session=null,state=null,uploading=false,selectedFile=null,selectedIndex=null,playerChannel=null;
 
 function toast(m){toastEl.textContent=m;toastEl.classList.remove('hidden');setTimeout(()=>toastEl.classList.add('hidden'),3200)}
 function escape(s){return String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
 function cardTone(i){if(i===12)return 'free';const r=Math.floor(i/5),c=i%5;return ((r+c)%2===0)?'blue':'white'}
 
-async function ensureSession(){let {data}=await sb.auth.getSession();if(data.session){session=data.session;return}let r=await sb.auth.signInAnonymously({options:{data:{app:'accelarate-2026'}}});if(r.error)throw r.error;session=r.data.session}
-async function api(action,payload={}){const {data}=await sb.auth.getSession();const token=data.session?.access_token;if(!token)throw new Error('Session expired');const r=await fetch(`${cfg.SUPABASE_URL}/functions/v1/game-api`,{method:'POST',headers:{'Content-Type':'application/json','apikey':cfg.SUPABASE_PUBLISHABLE_KEY,'Authorization':`Bearer ${token}`},body:JSON.stringify({action,...payload})});const j=await r.json();if(!r.ok||j.error)throw new Error(j.error||'Request failed');return j}
+async function ensureSession({refresh=false}={}){
+  let {data,error}=await sb.auth.getSession();
+  if(error)throw error;
+  if(data.session && !refresh){session=data.session;return session}
+  if(data.session && refresh){
+    const refreshed=await sb.auth.refreshSession();
+    if(!refreshed.error && refreshed.data.session){session=refreshed.data.session;return session}
+    // If refresh fails, keep the existing session when it is still present.
+    session=data.session;
+    return session;
+  }
+  const r=await sb.auth.signInAnonymously({options:{data:{app:'accelarate-2026'}}});
+  if(r.error)throw r.error;
+  session=r.data.session;
+  return session;
+}
+async function api(action,payload={}){
+  let s=await ensureSession();
+  let r=await fetch(`${cfg.SUPABASE_URL}/functions/v1/game-api`,{method:'POST',headers:{'Content-Type':'application/json','apikey':cfg.SUPABASE_PUBLISHABLE_KEY,'Authorization':`Bearer ${s.access_token}`},body:JSON.stringify({action,...payload})});
+  let j=null;try{j=await r.json()}catch{}
+  // A stale anonymous access token can surface as a 401. Refresh the session once and retry.
+  if(r.status===401){
+    s=await ensureSession({refresh:true});
+    r=await fetch(`${cfg.SUPABASE_URL}/functions/v1/game-api`,{method:'POST',headers:{'Content-Type':'application/json','apikey':cfg.SUPABASE_PUBLISHABLE_KEY,'Authorization':`Bearer ${s.access_token}`},body:JSON.stringify({action,...payload})});
+    try{j=await r.json()}catch{}
+  }
+  if(!r.ok||j?.error){
+    const err=typeof j?.error==='string'?j.error:j?.error?.message||JSON.stringify(j?.error)||`Request failed (${r.status})`;
+    throw new Error(err);
+  }
+  return j;
+}
 async function getPhotoUrl(path){if(!path)return null;const {data,error}=await sb.storage.from('selfies').createSignedUrl(path,3600);return error?null:data?.signedUrl||null}
-async function loadState(){const id=localStorage.getItem('acc_player_id');if(!id)return false;try{state=await api('player_state',{player_id:id});return true}catch(e){localStorage.removeItem('acc_player_id');return false}}
+async function loadState(){const id=localStorage.getItem('acc_player_id');if(!id)return false;try{await ensureSession({refresh:true});state=await api('player_state',{player_id:id});return true}catch(e){toast(e.message);return false}}
+function subscribeToPlayer(){
+  if(playerChannel){sb.removeChannel(playerChannel);playerChannel=null}
+  const id=state?.player?.id;if(!id)return;
+  playerChannel=sb.channel(`acc-player-${id}`).on('postgres_changes',{event:'UPDATE',schema:'public',table:'players',filter:`id=eq.${id}`},async payload=>{
+    const previous=state?.player?.blackout_status;
+    const previousBingoRejected=!!state?.player?.bingo_rejected;
+    if(await loadState()){
+      render();
+      const status=state?.player?.blackout_status;
+      if(status==='rejected' && previous!=='rejected') toast('⚠️ Your Blackout submission was not accepted. Please review the message on your board.');
+      if(status==='approved' && previous!=='approved') toast('👑 Your Blackout submission was approved!');
+      const bingoRejected=!!state?.player?.bingo_rejected;
+      if(bingoRejected && !previousBingoRejected) toast('⚠️ Your Bingo submission was not accepted. Please review the message on your board.');
+      if(!bingoRejected && previousBingoRejected) toast('✅ Your Bingo status was restored by the organizer.');
+    }
+  }).subscribe();
+}
 
 function intro(){root.innerHTML=`<section class="panel"><h2>Join the game</h2><p class="muted">Enter your name. You’ll receive one of the five official ACCELARATE cards.</p><label class="sr-only" for="name">Your name</label><input id="name" class="input" maxlength="80" placeholder="Your name" autocomplete="name"><div style="height:10px"></div><button id="join" class="btn btn-primary">Start My Bingo</button><div style="height:12px"></div><div class="notice small">Your game session is saved on this phone. You do not need an email or account.</div></section>`;document.getElementById('join').onclick=join;document.getElementById('name').addEventListener('keydown',e=>{if(e.key==='Enter')join()})}
 async function join(){const name=document.getElementById('name').value.trim();if(!name)return toast('Enter your name first.');const b=document.getElementById('join');b.disabled=true;b.textContent='Joining…';try{const j=await api('join',{player_name:name});localStorage.setItem('acc_player_id',j.player_id);await loadState();render()}catch(e){toast(e.message);b.disabled=false;b.textContent='Start My Bingo'}}
@@ -20,13 +67,14 @@ function render(){
   if(!state){intro();return}
   const completed=state.completedCount;const pct=Math.round(completed/24*100);const bingo=state.player.first_bingo_at;const blackout=state.player.blackout_claimed_at;
   root.innerHTML=`<section class="panel"><div class="row"><div class="grow"><b>${escape(state.player.display_name)}</b><div class="muted">Card #${state.card.card_number}</div></div><button id="refresh" class="btn btn-light" aria-label="Refresh game status">Refresh</button></div><div style="height:12px"></div><div class="stats"><div class="stat"><span class="muted">Selfies</span><b>${completed}/24</b></div><div class="stat"><span class="muted">Bingo</span><b>${bingo?'✓':'—'}</b></div><div class="stat"><span class="muted">Blackout</span><b>${blackout?'✓':'—'}</b></div><div class="stat"><span class="muted">Card</span><b>#${state.card.card_number}</b></div></div><div style="height:10px"></div><div class="progress" role="progressbar" aria-label="Selfie completion progress" aria-valuemin="0" aria-valuemax="24" aria-valuenow="${completed}"><span style="width:${pct}%"></span></div></section><section class="panel notice"><b>🎯 BINGO REQUIREMENT</b><div class="small">Complete <strong>one full horizontal row AND one full vertical column</strong>. BLACKOUT requires all 24 attendee squares; Free Space is automatic.</div></section>
-  ${bingo?`<section class="panel success" aria-live="polite"><b>🎉 BINGO!</b><div class="small">First Bingo: ${new Date(bingo).toLocaleTimeString()} • ${escape(state.player.first_bingo_pattern||'Row + Column')}</div>${blackout?'':'<div class="small" style="margin-top:5px">Keep going — Blackout is still in the race.</div>'}</section>`:''}
-  ${blackout?`<section class="panel warning" aria-live="polite"><b>👑 BLACKOUT CLAIMED</b><div class="small">Claim submitted at ${new Date(blackout).toLocaleTimeString()}. Organizer verification determines the Grand Prize winner.</div></section>`:`<section class="panel"><b>👑 Blackout race</b><div class="small muted">Complete all 24 attendee selfies. Free Space is automatic.</div></section>`}
+  ${state.game_status!=='open'?`<section class="panel warning" aria-live="polite"><b>⏸️ GAME ${escape(String(state.game_status||'paused').toUpperCase())}</b><div class="small">The organizer has temporarily stopped new submissions. Your progress is saved. When the organizer reopens the game, tap <strong>Refresh</strong> and you can continue with the same card and progress.</div></section>`:''}
+  ${state.player.bingo_rejected?`<section class="panel danger" aria-live="assertive"><b>⚠️ BINGO SUBMISSION NOT ACCEPTED</b><div class="small">Your Bingo submission was reviewed and was not accepted by the organizer.</div>${state.player.bingo_note?`<div class="small" style="margin-top:6px"><strong>Organizer note:</strong> ${escape(state.player.bingo_note)}</div>`:''}<div class="small" style="margin-top:6px">Your completed squares are still saved. You may continue playing toward Blackout.</div></section>`:bingo?`<section class="panel success" aria-live="polite"><b>🎉 BINGO!</b><div class="small">First Bingo: ${new Date(bingo).toLocaleTimeString()} • ${escape(state.player.first_bingo_pattern||'Row + Column')}</div>${blackout?'':'<div class="small" style="margin-top:5px">Keep going — Blackout is still in the race.</div>'}</section>`:''}
+  ${state.player.blackout_status==='rejected'?`<section class="panel danger" aria-live="assertive"><b>⚠️ BLACKOUT SUBMISSION NOT ACCEPTED</b><div class="small">Your Blackout submission was reviewed and was not accepted by the organizer.</div>${state.player.blackout_note?`<div class="small" style="margin-top:6px"><strong>Organizer note:</strong> ${escape(state.player.blackout_note)}</div>`:''}<div class="small" style="margin-top:6px">Your completed squares are still saved. Continue the game or contact the organizer if you have questions.</div></section>`:blackout?`<section class="panel warning" aria-live="polite"><b>👑 BLACKOUT CLAIMED</b><div class="small">Claim submitted at ${new Date(blackout).toLocaleTimeString()}. Organizer verification determines the Grand Prize winner.</div></section>`:`<section class="panel"><b>👑 Blackout race</b><div class="small muted">Complete all 24 attendee selfies. Free Space is automatic.</div></section>`}
   <section class="panel"><div class="board" role="grid" aria-label="ACCELARATE 2026 Bingo card">${state.squares.map((s,i)=>cell(s,i)).join('')}</div><p class="board-help">Tap a square to add its selfie. Choose <strong>Take Photo</strong> or <strong>Choose from Photos</strong>.</p></section>
   <section class="panel"><h3>🏆 Live Leaderboard</h3><div id="leaderboard" aria-live="polite"><span class="muted">Loading…</span></div></section>`;
   document.getElementById('refresh').onclick=async()=>{await loadState();render()};
   document.querySelectorAll('.cell[data-index]').forEach(el=>el.onclick=()=>openPhotoChooser(Number(el.dataset.index)));
-  loadLeaderboard();setTimeout(refreshImages,100);
+  subscribeToPlayer();loadLeaderboard();setTimeout(refreshImages,100);
 }
 
 function cell(s,i){
@@ -69,9 +117,31 @@ async function handleChosenFile(file){
 async function saveSelectedPhoto(){
   if(!selectedFile||selectedIndex===null||uploading)return;
   try{
-    uploading=true;toast('Uploading photo…');
-    const blob=await compress(selectedFile);const user=(await sb.auth.getUser()).data.user;const playerId=state.player.id;const path=`${user.id}/${playerId}/${selectedIndex}.jpg`;
-    const up=await sb.storage.from('selfies').upload(path,blob,{contentType:'image/jpeg',upsert:true});if(up.error)throw up.error;
+    uploading=true;
+    // Refresh the player's server state before uploading. If the organizer has closed/paused
+    // the game, stop here so the browser never attempts an RLS-protected upload that cannot be recorded.
+    await loadState();
+    if(!state){throw new Error('Your game session could not be restored. Tap Refresh and try again.')}
+    if(state.game_status!=='open'){
+      closePhotoChooser();
+      render();
+      toast('The game is currently closed/paused. Your progress is saved. Tap Refresh after the organizer reopens it.');
+      return;
+    }
+    await ensureSession({refresh:true});
+    toast('Uploading photo…');
+    const blob=await compress(selectedFile);
+    const user=(await sb.auth.getUser()).data.user;
+    if(!user)throw new Error('Your game session expired. Tap Refresh and try again.');
+    const playerId=state.player.id;
+    const path=`${user.id}/${playerId}/${selectedIndex}.jpg`;
+    const up=await sb.storage.from('selfies').upload(path,blob,{contentType:'image/jpeg',upsert:true});
+    if(up.error){
+      // Refresh the auth session once if storage rejects a stale session, then retry the upload.
+      await ensureSession({refresh:true});
+      const retry=await sb.storage.from('selfies').upload(path,blob,{contentType:'image/jpeg',upsert:true});
+      if(retry.error)throw retry.error;
+    }
     const result=await api('record_photo',{player_id:playerId,square_index:selectedIndex,storage_path:path});
     closePhotoChooser();await loadState();render();
     if(result.bingo_achieved)toast(`🎉 BINGO! ${result.bingo_pattern}`);else if(result.blackout_achieved)toast('👑 BLACKOUT CLAIMED! Organizer verification is next.');else toast('Photo saved!');
@@ -79,5 +149,5 @@ async function saveSelectedPhoto(){
 }
 function closePhotoChooser(){const m=document.getElementById('photo-modal');if(m)m.remove();selectedFile=null;selectedIndex=null}
 async function compress(file){const img=new Image();const url=URL.createObjectURL(file);await new Promise((res,rej)=>{img.onload=res;img.onerror=rej;img.src=url});const max=1200,scale=Math.min(1,max/Math.max(img.width,img.height));const c=document.createElement('canvas');c.width=Math.round(img.width*scale);c.height=Math.round(img.height*scale);c.getContext('2d').drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(url);return await new Promise(r=>c.toBlob(r,'image/jpeg',.82))}
-async function loadLeaderboard(){try{const rows=await api('leaderboard');const el=document.getElementById('leaderboard');if(!el)return;el.innerHTML=`<table class="leader"><thead><tr><th>Player</th><th>Bingo</th><th>Blackout</th></tr></thead><tbody>${rows.slice(0,15).map(r=>`<tr><td>${escape(r.display_name)} <span class="pill">Card ${r.card_number}</span></td><td>${r.first_bingo_at?new Date(r.first_bingo_at).toLocaleTimeString():'—'}</td><td>${r.blackout_status==='approved'?'👑 Verified':r.blackout_claimed_at?'🟡 Pending':'—'}</td></tr>`).join('')}</tbody></table>`}catch(e){}}
+async function loadLeaderboard(){try{const rows=await api('leaderboard');const el=document.getElementById('leaderboard');if(!el)return;el.innerHTML=`<table class="leader"><thead><tr><th>Player</th><th>Bingo</th><th>Blackout</th></tr></thead><tbody>${rows.slice(0,15).map(r=>`<tr><td>${escape(r.display_name)} <span class="pill">Card ${r.card_number}</span></td><td>${r.first_bingo_at?(r.bingo_rejected?'⚠️ Rejected':new Date(r.first_bingo_at).toLocaleTimeString()):'—'}</td><td>${r.blackout_status==='approved'?'👑 Verified':r.blackout_claimed_at?'🟡 Pending':'—'}</td></tr>`).join('')}</tbody></table>`}catch(e){}}
 (async()=>{try{await ensureSession();if(await loadState()){render()}else intro()}catch(e){root.innerHTML=`<section class="panel danger">Unable to start the game: ${escape(e.message)}</section>`}})();
