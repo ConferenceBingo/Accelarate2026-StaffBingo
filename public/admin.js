@@ -189,7 +189,22 @@ async function restoreBlackout(id){
     await load();
   }catch(e){toast(apiErrorMessage(e))}
 }
-async function verify(id,approved){const note=approved?'Verified by organizer':'Organizer rejected/reviewed claim';try{await api('verify_blackout',{player_id:id,approved,note});toast(approved?'Blackout verified.':'Blackout rejected.');await load()}catch(e){toast(apiErrorMessage(e))}}
+async function verify(id,approved){
+  let note=null;
+  if(approved){
+    note='Verified by organizer';
+  }else{
+    note=prompt('Enter a message for the player explaining why the Blackout submission was not accepted:');
+    if(note===null)return;
+    note=note.trim();
+    if(!note){toast('Please enter a message explaining why the Blackout was not accepted.');return;}
+  }
+  try{
+    await api('verify_blackout',{player_id:id,approved,note});
+    toast(approved?'Blackout verified.':'Blackout rejected. The player will be notified.');
+    await load();
+  }catch(e){toast(apiErrorMessage(e))}
+}
 async function control(id){
   const status=id==='open'?'open':id==='pause'?'paused':'closed';
   try{

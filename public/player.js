@@ -99,7 +99,12 @@ function render(){
   const rb=document.getElementById('resubmit-bingo'); if(rb) rb.onclick=()=>resubmitBingo();
   const ro=document.getElementById('resubmit-blackout'); if(ro) ro.onclick=()=>resubmitBlackout();
   document.querySelectorAll('.cell[data-index]').forEach(el=>el.onclick=()=>openPhotoChooser(Number(el.dataset.index)));
-  subscribeToPlayer();loadLeaderboard();if(leaderboardTimer)clearInterval(leaderboardTimer);leaderboardTimer=setInterval(loadLeaderboard,5000);setTimeout(refreshImages,100);
+  subscribeToPlayer();
+  loadLeaderboard();
+  if(leaderboardTimer)clearTimeout(leaderboardTimer);
+  const scheduleLeaderboardRefresh=()=>{leaderboardTimer=setTimeout(async()=>{if(document.visibilityState==='visible')await loadLeaderboard();scheduleLeaderboardRefresh()},5000)};
+  scheduleLeaderboardRefresh();
+  setTimeout(refreshImages,100);
 }
 
 function cell(s,i){
@@ -204,5 +209,16 @@ async function resubmitBlackout(){
     await loadState();render();toast('👑 Blackout resubmitted for organizer verification.');
   }catch(e){toast(e.message||'Unable to resubmit Blackout.')}
 }
-async function loadLeaderboard(){try{const rows=await api('leaderboard');const el=document.getElementById('leaderboard');if(!el)return;el.innerHTML=`<table class="leader"><thead><tr><th>Player</th><th>Bingo</th><th>Blackout</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${escape(r.display_name)} <span class="pill">Card ${r.card_number}</span></td><td>${r.bingo_status==='approved'?'<span class="pill good">Approved</span>':r.bingo_status==='pending'?'<span class="pill warn">Pending</span>':'—'}</td><td>${r.blackout_status_public==='approved'?'<span class="pill good">Approved</span>':r.blackout_status_public==='pending'?'<span class="pill warn">Pending</span>':'—'}</td></tr>`).join('')||'<tr><td colspan="3">No players yet.</td></tr>'}</tbody></table>`}catch(e){}}
+async function loadLeaderboard(){
+  const el=document.getElementById('leaderboard');
+  if(!el)return;
+  try{
+    const rows=await api('leaderboard');
+    const list=Array.isArray(rows)?rows:[];
+    el.innerHTML=`<div class="small muted" style="margin-bottom:6px">Live standings • updates automatically</div><table class="leader"><thead><tr><th>Player</th><th>Bingo</th><th>Blackout</th></tr></thead><tbody>${list.map(r=>`<tr><td>${escape(r.display_name)} <span class="pill">Card ${r.card_number}</span></td><td>${r.bingo_status==='approved'?'<span class="pill good">Approved</span>':r.bingo_status==='pending'?'<span class="pill warn">Pending</span>':'—'}</td><td>${r.blackout_status_public==='approved'?'<span class="pill good">Approved</span>':r.blackout_status_public==='pending'?'<span class="pill warn">Pending</span>':'—'}</td></tr>`).join('')||'<tr><td colspan="3">No players yet.</td></tr>'}</tbody></table>`;
+  }catch(e){
+    console.error('Leaderboard refresh failed:',e);
+    el.innerHTML=`<div class="notice">Leaderboard temporarily unavailable. Retrying automatically…</div>`;
+  }
+}
 (async()=>{try{await ensureSession();if(await loadState()){render()}else intro()}catch(e){root.innerHTML=`<section class="panel danger">Unable to start the game: ${escape(e.message)}</section>`}})();
