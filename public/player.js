@@ -213,18 +213,26 @@ async function loadLeaderboard(){
   const el=document.getElementById('leaderboard');
   if(!el)return;
   try{
-    const rows=await api('leaderboard');
-    const list=Array.isArray(rows)?rows:[];
+    // The public leaderboard is intentionally read through a public Edge
+    // Function action so a stale/expired player session cannot prevent the
+    // leaderboard from loading. Only non-sensitive public standings are returned.
+    const r=await fetch(`${cfg.SUPABASE_URL}/functions/v1/game-api`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','apikey':cfg.SUPABASE_PUBLISHABLE_KEY},
+      body:JSON.stringify({action:'public_leaderboard'})
+    });
+    let j=null;try{j=await r.json()}catch{}
+    if(!r.ok||j?.error)throw new Error(typeof j?.error==='string'?j.error:j?.error?.message||`Leaderboard request failed (${r.status})`);
+    const list=Array.isArray(j)?j:[];
     const statusPill=(status)=>{
-      if(!status)return '—';
       const cls=status==='approved'?'good':status==='rejected'?'bad':status==='submitted'?'submitted':'pending';
       const label=status==='approved'?'Approved':status==='rejected'?'Rejected':status==='submitted'?'Submitted':'Pending';
       return `<span class="pill ${cls}">${label}</span>`;
     };
-    el.innerHTML=`<div class="small muted" style="margin-bottom:6px">Live standings • updates automatically</div><table class="leader"><thead><tr><th>Player</th><th>Bingo</th><th>Blackout</th></tr></thead><tbody>${list.map(r=>`<tr><td>${escape(r.display_name)} <span class="pill">Card ${r.card_number}</span></td><td>${statusPill(r.bingo_status)}</td><td>${statusPill(r.blackout_status_public)}</td></tr>`).join('')||'<tr><td colspan="3">No players yet.</td></tr>'}</tbody></table>`;
+    el.innerHTML=`<div class="small muted" style="margin-bottom:6px">Live standings • updates automatically</div><table class="leader"><thead><tr><th>Player</th><th>Bingo</th><th>Blackout</th></tr></thead><tbody>${list.map(r=>`<tr><td>${escape(r.display_name)} <span class="pill">Card ${escape(r.card_number)}</span></td><td>${statusPill(r.bingo_status)}</td><td>${statusPill(r.blackout_status_public)}</td></tr>`).join('')||'<tr><td colspan="3">No players yet.</td></tr>'}</tbody></table>`;
   }catch(e){
     console.error('Leaderboard refresh failed:',e);
-    el.innerHTML=`<div class="notice">Leaderboard temporarily unavailable. Retrying automatically…</div>`;
+    el.innerHTML=`<div class="notice">Leaderboard temporarily unavailable. Retrying automatically…<div class="small" style="margin-top:6px">${escape(e.message||'Unknown error')}</div></div>`;
   }
 }
 (async()=>{try{await ensureSession();if(await loadState()){render()}else intro()}catch(e){root.innerHTML=`<section class="panel danger">Unable to start the game: ${escape(e.message)}</section>`}})();
