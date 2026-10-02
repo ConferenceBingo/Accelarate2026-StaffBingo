@@ -218,8 +218,7 @@ async function verifyBingo(id,rejected){
     if(!note){toast('Please enter a message explaining why the Bingo was not accepted.');return;}
   }
   try{
-    const {data,error}=await sb.rpc('admin_set_bingo_rejection',{p_player_id:id,p_rejected:rejected,p_note:note});
-    if(error) throw error;
+    await api('verify_bingo',{player_id:id,rejected,note});
     toast(rejected?'Bingo rejected. The player will be notified.':'Bingo approved.');
     await load();
   }catch(e){toast(apiErrorMessage(e))}
