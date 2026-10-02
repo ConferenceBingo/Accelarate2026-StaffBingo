@@ -37,9 +37,13 @@ async function isAdmin(userId: string) {
 async function playerState(userClient: any, playerId: string) {
   const { data: player, error: pErr } = await userClient
     .from('players')
-    .select('id,display_name,card_id,joined_at,first_bingo_at,first_bingo_pattern,blackout_claimed_at,blackout_status,blackout_verified_at')
+    .select('id,display_name,card_id,game_id,joined_at,first_bingo_at,first_bingo_pattern,bingo_rejected,bingo_note,blackout_claimed_at,blackout_status,blackout_verified_at,blackout_note')
     .eq('id', playerId).single()
   if (pErr) throw pErr
+
+  const { data: game, error: gErr } = await userClient
+    .from('games').select('id,status').eq('id', player.game_id).single()
+  if (gErr) throw gErr
 
   const { data: card, error: cErr } = await userClient
     .from('cards').select('id,card_number').eq('id', player.card_id).single()
@@ -60,6 +64,7 @@ async function playerState(userClient: any, playerId: string) {
 
   return {
     player,
+    game_status: game.status,
     card,
     squares: merged,
     completedCount: merged.filter((s: any) => s.completed && !s.is_free).length,
@@ -71,7 +76,7 @@ async function playerState(userClient: any, playerId: string) {
 async function leaderboard() {
   const { data: players, error } = await admin
     .from('players')
-    .select('id,display_name,card_id,first_bingo_at,first_bingo_pattern,blackout_claimed_at,blackout_status,blackout_verified_at,joined_at')
+    .select('id,display_name,card_id,first_bingo_at,first_bingo_pattern,bingo_rejected,bingo_note,blackout_claimed_at,blackout_status,blackout_verified_at,joined_at')
     .eq('game_id', (await admin.from('games').select('id').eq('slug','accelarate-2026').single()).data?.id)
     .order('first_bingo_at', { ascending: true, nullsFirst: false })
   if (error) throw error
@@ -90,7 +95,7 @@ async function leaderboard() {
 
 async function adminSnapshot() {
   const game = (await admin.from('games').select('*').eq('slug','accelarate-2026').single()).data
-  const players = (await admin.from('players').select('id,display_name,card_id,joined_at,first_bingo_at,first_bingo_pattern,blackout_claimed_at,blackout_status,blackout_verified_at,blackout_note').eq('game_id',game.id).order('joined_at')).data || []
+  const players = (await admin.from('players').select('id,display_name,card_id,joined_at,first_bingo_at,first_bingo_pattern,bingo_rejected,bingo_note,blackout_claimed_at,blackout_status,blackout_verified_at,blackout_note').eq('game_id',game.id).order('joined_at')).data || []
   const cardIds = [...new Set(players.map((p: any) => p.card_id))]
   const cards = (await admin.from('cards').select('id,card_number').in('id',cardIds.length ? cardIds : ['00000000-0000-0000-0000-000000000000'])).data || []
   const cardMap = new Map(cards.map((c: any) => [c.id,c.card_number]))
@@ -168,11 +173,40 @@ Deno.serve(async (req) => {
       return json(await leaderboard())
     }
 
-    if (action === 'admin_snapshot' || action === 'verify_blackout' || action === 'game_control') {
+    if (action === 'admin_snapshot' || action === 'verify_blackout' || action === 'verify_bingo' || action === 'game_control') {
       const adminUser = await isAdmin(user.id)
       if (!adminUser) return json({ error: 'Organizer access required' }, 403)
 
       if (action === 'admin_snapshot') return json(await adminSnapshot())
+
+      if (action === 'verify_bingo') {
+        const playerId = String(body.player_id)
+        const rejected = !!body.rejected
+        const note = body.note ? String(body.note) : null
+        const now = new Date().toISOString()
+        const { data: player, error: pErr } = await admin.from('players')
+          .select('id,game_id,display_name,first_bingo_at,first_bingo_pattern')
+          .eq('id', playerId).single()
+        if (pErr) throw pErr
+        if (!player.first_bingo_at) return json({ error: 'No Bingo claim' }, 400)
+
+        const { error: uErr } = await admin.from('players').update({
+          bingo_rejected: rejected,
+          bingo_note: rejected ? note : null
+        }).eq('id', playerId)
+        if (uErr) throw uErr
+
+        const { error: eErr } = await admin.from('game_events').insert({
+          game_id: player.game_id,
+          player_id: playerId,
+          event_type: rejected ? 'bingo_rejected' : 'bingo_reinstated',
+          pattern: player.first_bingo_pattern,
+          created_at: now,
+          metadata: { rejected, note }
+        })
+        if (eErr) throw eErr
+        return json({ player_id: playerId, bingo_rejected: rejected })
+      }
 
       if (action === 'verify_blackout') {
         const playerId = String(body.player_id)
