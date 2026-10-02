@@ -136,9 +136,8 @@ async function resetGame(){
   const typed=prompt(`RESET ENTIRE GAME?\n\nThis will permanently remove ${p.length} player(s), their selfie progress, Bingo/Blackout results, and game events.\n\nYour five Bingo cards, attendee list, game configuration, and organizer accounts will remain.\n\nType RESET to continue.`);
   if(typed!=='RESET'){if(typed!==null)toast('Reset cancelled. You must type RESET exactly.');return;}
   try{
-    const {data,error}=await sb.rpc('admin_reset_game');
-    if(error) throw error;
-    toast(`Game reset. ${data?.players_removed??p.length} player(s) removed.`);
+    const data=await api('admin_reset_game');
+    toast(`Game reset. ${data?.players_removed??p.length} player(s) removed and ${data?.photos_removed??0} selfie file(s) removed.`);
     await load();
   }catch(e){toast(apiErrorMessage(e));}
 }
