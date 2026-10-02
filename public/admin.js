@@ -106,8 +106,7 @@ async function viewBoard(playerId){
   openBoardPlayerId=playerId;
   try{
     toast('Loading player board…');
-    const {data,error}=await sb.rpc('admin_get_player_board',{p_player_id:playerId});
-    if(error) throw error;
+    const data=await api('admin_player_board',{player_id:playerId,_refresh:Date.now()});
     if(!data) throw new Error('Board data not found');
     const defs=data.definitions||[];
     const sq=data.squares||[];

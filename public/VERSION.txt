@@ -1,3 +1,3 @@
 ACCELARATE 2026 Multiplayer Bingo
-Live refresh + Bingo approval race workflow fix
-Build: 20261002-bingo-approval-race-fix1
+Session + Admin Board + Bingo Approval status fix
+Build: 20261002-session-status-fix4

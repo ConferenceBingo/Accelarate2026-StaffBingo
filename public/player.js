@@ -11,16 +11,20 @@ function cardTone(i){if(i===12)return 'free';const r=Math.floor(i/5),c=i%5;retur
 async function ensureSession({refresh=false}={}){
   let {data,error}=await sb.auth.getSession();
   if(error)throw error;
-  if(data.session && !refresh){session=data.session;return session}
-  if(data.session && refresh){
-    const refreshed=await sb.auth.refreshSession();
-    if(!refreshed.error && refreshed.data.session){session=refreshed.data.session;return session}
-    // If refresh fails, keep the existing session when it is still present.
+  if(data.session){
     session=data.session;
+    // Supabase's auth client already auto-refreshes tokens. Avoid forcing a
+    // refresh on every board poll because an anonymous session can be briefly
+    // unavailable while the refresh request is completing.
+    if(refresh && data.session.expires_at && data.session.expires_at*1000 < Date.now()+60000){
+      const refreshed=await sb.auth.refreshSession();
+      if(!refreshed.error && refreshed.data.session){session=refreshed.data.session;}
+    }
     return session;
   }
   const r=await sb.auth.signInAnonymously({options:{data:{app:'accelarate-2026'}}});
   if(r.error)throw r.error;
+  if(!r.data.session)throw new Error('Anonymous player sign-in did not return a session.');
   session=r.data.session;
   return session;
 }
@@ -64,7 +68,30 @@ async function syncCanonicalGameStatus(){
     return false;
   }
 }
-async function loadState(){const id=localStorage.getItem('acc_player_id');if(!id)return false;try{await ensureSession({refresh:true});state=await api('player_state',{player_id:id});await syncCanonicalGameStatus();return true}catch(e){toast(e.message);return false}}
+async function loadState(){
+  const id=localStorage.getItem('acc_player_id');
+  if(!id)return false;
+  try{
+    await ensureSession({refresh:true});
+    state=await api('player_state',{player_id:id});
+    await syncCanonicalGameStatus();
+    return true;
+  }catch(e){
+    const msg=String(e?.message||e||'');
+    // A browser can lose an anonymous auth session while retaining the old
+    // player id in localStorage. Never leave the player stuck on a dead board.
+    // Clear only when the server confirms that this session cannot access the
+    // saved player; the user can immediately rejoin with the same name.
+    if(/no rows|not found|does not match|different game|permission|JWT|session/i.test(msg)){
+      localStorage.removeItem('acc_player_id');
+      state=null;
+      toast('Your saved game session expired. Please enter your name to rejoin.');
+      return false;
+    }
+    toast(msg);
+    return false;
+  }
+}
 function subscribeToPlayer(){
   if(playerChannel){sb.removeChannel(playerChannel);playerChannel=null}
   const id=state?.player?.id;if(!id)return;
@@ -88,8 +115,8 @@ async function join(){const name=document.getElementById('name').value.trim();if
 
 function render(){
   if(!state){intro();return}
-  const completed=state.completedCount;const pct=Math.round(completed/24*100);const bingo=state.player.first_bingo_at;const blackout=state.player.blackout_claimed_at;
-  root.innerHTML=`<section class="panel"><div class="row"><div class="grow"><b>${escape(state.player.display_name)}</b><div class="muted">Card #${state.card.card_number}</div></div><button id="refresh" class="btn btn-light" aria-label="Refresh game status">Refresh</button></div><div style="height:12px"></div><div class="stats"><div class="stat"><span class="muted">Selfies</span><b>${completed}/24</b></div><div class="stat"><span class="muted">Bingo</span><b>${bingo?'✓':'—'}</b></div><div class="stat"><span class="muted">Blackout</span><b>${blackout?'✓':'—'}</b></div><div class="stat"><span class="muted">Card</span><b>#${state.card.card_number}</b></div></div><div style="height:10px"></div><div class="progress" role="progressbar" aria-label="Selfie completion progress" aria-valuemin="0" aria-valuemax="24" aria-valuenow="${completed}"><span style="width:${pct}%"></span></div></section><section class="panel notice"><b>🎯 BINGO REQUIREMENT</b><div class="small">Complete <strong>one full horizontal row AND one full vertical column</strong>. BLACKOUT requires all 24 attendee squares; Free Space is automatic.</div></section>
+  const completed=state.completedCount;const pct=Math.round(completed/24*100);const bingo=state.player.first_bingo_at;const bingoStatus=state.player.bingo_status||null;const blackout=state.player.blackout_claimed_at;
+  root.innerHTML=`<section class="panel"><div class="row"><div class="grow"><b>${escape(state.player.display_name)}</b><div class="muted">Card #${state.card.card_number}</div></div><button id="refresh" class="btn btn-light" aria-label="Refresh game status">Refresh</button></div><div style="height:12px"></div><div class="stats"><div class="stat"><span class="muted">Selfies</span><b>${completed}/24</b></div><div class="stat"><span class="muted">Bingo</span><b>${bingoStatus==='approved'?'Approved':bingoStatus==='rejected'?'Rejected':bingo?'Submitted':'—'}</b></div><div class="stat"><span class="muted">Blackout</span><b>${blackout?'✓':'—'}</b></div><div class="stat"><span class="muted">Card</span><b>#${state.card.card_number}</b></div></div><div style="height:10px"></div><div class="progress" role="progressbar" aria-label="Selfie completion progress" aria-valuemin="0" aria-valuemax="24" aria-valuenow="${completed}"><span style="width:${pct}%"></span></div></section><section class="panel notice"><b>🎯 BINGO REQUIREMENT</b><div class="small">Complete <strong>one full horizontal row AND one full vertical column</strong>. BLACKOUT requires all 24 attendee squares; Free Space is automatic.</div></section>
   ${state.game_status!=='open'?`<section class="panel warning" aria-live="polite"><b>⏸️ GAME ${escape(String(state.game_status||'paused').toUpperCase())}</b><div class="small">The organizer has temporarily stopped new submissions. Your progress is saved. When the organizer reopens the game, tap <strong>Refresh</strong> and you can continue with the same card and progress.</div></section>`:''}
   ${state.player.bingo_rejected?`<section class="panel danger" aria-live="assertive"><b>⚠️ BINGO SUBMISSION NOT ACCEPTED</b><div class="small">Your Bingo submission was reviewed and was not accepted by the organizer.</div>${state.player.bingo_note?`<div class="small" style="margin-top:6px"><strong>Organizer note:</strong> ${escape(state.player.bingo_note)}</div>`:''}<div class="small" style="margin-top:6px">Your completed squares are still saved.</div><div style="height:10px"></div><button id="resubmit-bingo" class="btn btn-primary">✓ Board Ready — Resubmit Bingo</button></section>`:bingo?`<section class="panel success" aria-live="polite"><b>🎉 BINGO!</b><div class="small">First Bingo: ${new Date(bingo).toLocaleTimeString()} • ${escape(state.player.first_bingo_pattern||'Row + Column')}</div>${blackout?'':'<div class="small" style="margin-top:5px">Keep going — Blackout is still in the race.</div>'}</section>`:''}
   ${state.player.blackout_status==='rejected'?`<section class="panel danger" aria-live="assertive"><b>⚠️ BLACKOUT SUBMISSION NOT ACCEPTED</b><div class="small">Your Blackout submission was reviewed and was not accepted by the organizer.</div>${state.player.blackout_note?`<div class="small" style="margin-top:6px"><strong>Organizer note:</strong> ${escape(state.player.blackout_note)}</div>`:''}<div class="small" style="margin-top:6px">Your completed squares are still saved.</div><div style="height:10px"></div><button id="resubmit-blackout" class="btn btn-primary">✓ Board Ready — Resubmit Blackout</button></section>`:blackout?`<section class="panel warning" aria-live="polite"><b>👑 BLACKOUT CLAIMED</b><div class="small">Claim submitted at ${new Date(blackout).toLocaleTimeString()}. Organizer verification determines the Grand Prize winner.</div></section>`:`<section class="panel"><b>👑 Blackout race</b><div class="small muted">Complete all 24 attendee selfies. Free Space is automatic.</div></section>`}
