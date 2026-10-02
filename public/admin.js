@@ -175,13 +175,23 @@ async function verifyBingo(id,rejected){
     if(note===null)return;
   }
   try{
-    await api('verify_bingo',{player_id:id,rejected,note});
+    const {data,error}=await sb.rpc('admin_set_bingo_rejection',{p_player_id:id,p_rejected:rejected,p_note:note});
+    if(error) throw error;
     toast(rejected?'Bingo rejected. The player will be notified.':'Bingo restored.');
     await load();
   }catch(e){toast(apiErrorMessage(e))}
 }
 async function verify(id,approved){const note=approved?'Verified by organizer':'Organizer rejected/reviewed claim';try{await api('verify_blackout',{player_id:id,approved,note});toast(approved?'Blackout verified.':'Blackout rejected.');await load()}catch(e){toast(apiErrorMessage(e))}}
-async function control(id){const command=id==='open'?'open':id==='pause'?'pause':'close';try{await api('game_control',{command});toast(`Game ${command}ed.`);await load()}catch(e){toast(apiErrorMessage(e))}}
+async function control(id){
+  const status=id==='open'?'open':id==='pause'?'paused':'closed';
+  try{
+    if(!snapshot?.game?.id) throw new Error('Game ID is not available. Click Refresh and try again.');
+    const {data,error}=await sb.rpc('admin_set_game_status',{p_game_id:snapshot.game.id,p_status:status});
+    if(error) throw error;
+    toast(`Game ${status==='open'?'opened':status==='paused'?'paused':'closed'}.`);
+    await load();
+  }catch(e){toast(apiErrorMessage(e))}
+}
 function esc(s){return String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
 
 async function load({afterLogin=false}={}){
