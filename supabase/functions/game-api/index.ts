@@ -41,9 +41,12 @@ async function playerState(userClient: any, playerId: string) {
     .eq('id', playerId).single()
   if (pErr) throw pErr
 
+  // Always read the canonical ACCELARATE 2026 game by slug. This keeps the
+  // player view synchronized with the same game record the Admin controls.
   const { data: game, error: gErr } = await userClient
-    .from('games').select('id,status').eq('id', player.game_id).single()
+    .from('games').select('id,status').eq('slug','accelarate-2026').single()
   if (gErr) throw gErr
+  if (game.id !== player.game_id) throw new Error('Player is linked to a different game configuration')
 
   const { data: card, error: cErr } = await userClient
     .from('cards').select('id,card_number').eq('id', player.card_id).single()
