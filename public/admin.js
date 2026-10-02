@@ -6,6 +6,8 @@ let snapshot=null;
 let loading=false;
 let authReady=false;
 let boardModal=null;
+let dashboardTimer=null;
+let openBoardPlayerId=null;
 
 function toast(m){
   toastEl.textContent=m;
@@ -101,6 +103,7 @@ async function signedPhotoUrl(path){
 }
 
 async function viewBoard(playerId){
+  openBoardPlayerId=playerId;
   try{
     toast('Loading player board…');
     const {data,error}=await sb.rpc('admin_get_player_board',{p_player_id:playerId});
@@ -117,6 +120,7 @@ async function viewBoard(playerId){
     const bingo=data.player.first_bingo_at;
     const blackout=data.player.blackout_status;
     closeBoardModal();
+    openBoardPlayerId=playerId;
     boardModal=document.createElement('div');
     boardModal.className='modal';
     boardModal.innerHTML=`<div class="modal-card board-modal-card" role="dialog" aria-modal="true" aria-labelledby="boardTitle">
@@ -219,15 +223,14 @@ async function verifyBingo(id,rejected){
   }
   try{
     await api('verify_bingo',{player_id:id,rejected,note});
-    toast(rejected?'Bingo rejected. The player will be notified.':'Bingo approved.');
+    toast(rejected?'Bingo rejected. The player will be notified.':'Bingo approved — status is now Approved.');
     await load();
   }catch(e){toast(apiErrorMessage(e))}
 }
 async function restoreBingo(id){
   try{
     const {data,error}=await sb.rpc('admin_restore_bingo',{p_player_id:id});
-    if(error) throw error;
-    if(data?.error) throw new Error(data.error);
+    if(error)throw error;
     toast('Bingo restored to Submitted. Both decisions are available again.');
     await load();
   }catch(e){toast(apiErrorMessage(e))}
@@ -235,8 +238,7 @@ async function restoreBingo(id){
 async function restoreBlackout(id){
   try{
     const {data,error}=await sb.rpc('admin_restore_blackout',{p_player_id:id});
-    if(error) throw error;
-    if(data?.error) throw new Error(data.error);
+    if(error)throw error;
     toast('Blackout restored to Submitted. Both decisions are available again.');
     await load();
   }catch(e){toast(apiErrorMessage(e))}
@@ -273,9 +275,10 @@ async function load({afterLogin=false}={}){
   if(loading) return false;
   loading=true;
   try{
-    snapshot=await api('admin_snapshot');
+    snapshot=await api('admin_snapshot',{_refresh:Date.now()});
     authReady=true;
     render();
+    startDashboardAutoRefresh();
     return true;
   }catch(e){
     const msg=apiErrorMessage(e);
@@ -305,8 +308,24 @@ async function load({afterLogin=false}={}){
   }
 }
 
+function startDashboardAutoRefresh(){
+  if(dashboardTimer)clearInterval(dashboardTimer);
+  dashboardTimer=setInterval(async()=>{
+    if(document.visibilityState==='hidden' || loading) return;
+    const boardId=openBoardPlayerId;
+    const ok=await load();
+    if(ok && boardId && boardModal) await viewBoard(boardId);
+  },3000);
+}
+
+function stopDashboardAutoRefresh(){
+  if(dashboardTimer)clearInterval(dashboardTimer);
+  dashboardTimer=null;
+}
+
 sb.auth.onAuthStateChange((event,session)=>{
   if(event==='SIGNED_OUT' || !session){
+    stopDashboardAutoRefresh();
     authReady=false;
     login();
   }

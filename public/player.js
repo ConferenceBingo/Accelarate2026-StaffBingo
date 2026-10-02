@@ -26,12 +26,12 @@ async function ensureSession({refresh=false}={}){
 }
 async function api(action,payload={}){
   let s=await ensureSession();
-  let r=await fetch(`${cfg.SUPABASE_URL}/functions/v1/game-api`,{method:'POST',headers:{'Content-Type':'application/json','apikey':cfg.SUPABASE_PUBLISHABLE_KEY,'Authorization':`Bearer ${s.access_token}`},body:JSON.stringify({action,...payload})});
+  let r=await fetch(`${cfg.SUPABASE_URL}/functions/v1/game-api`,{method:'POST',headers:{'Content-Type':'application/json','Cache-Control':'no-cache','apikey':cfg.SUPABASE_PUBLISHABLE_KEY,'Authorization':`Bearer ${s.access_token}`},body:JSON.stringify({action,...payload})});
   let j=null;try{j=await r.json()}catch{}
   // A stale anonymous access token can surface as a 401. Refresh the session once and retry.
   if(r.status===401){
     s=await ensureSession({refresh:true});
-    r=await fetch(`${cfg.SUPABASE_URL}/functions/v1/game-api`,{method:'POST',headers:{'Content-Type':'application/json','apikey':cfg.SUPABASE_PUBLISHABLE_KEY,'Authorization':`Bearer ${s.access_token}`},body:JSON.stringify({action,...payload})});
+    r=await fetch(`${cfg.SUPABASE_URL}/functions/v1/game-api`,{method:'POST',headers:{'Content-Type':'application/json','Cache-Control':'no-cache','apikey':cfg.SUPABASE_PUBLISHABLE_KEY,'Authorization':`Bearer ${s.access_token}`},body:JSON.stringify({action,...payload})});
     try{j=await r.json()}catch{}
   }
   if(!r.ok||j?.error){
@@ -101,9 +101,11 @@ function render(){
   document.querySelectorAll('.cell[data-index]').forEach(el=>el.onclick=()=>openPhotoChooser(Number(el.dataset.index)));
   subscribeToPlayer();
   loadLeaderboard();
-  if(leaderboardTimer)clearTimeout(leaderboardTimer);
-  const scheduleLeaderboardRefresh=()=>{leaderboardTimer=setTimeout(async()=>{if(document.visibilityState==='visible')await loadLeaderboard();scheduleLeaderboardRefresh()},5000)};
-  scheduleLeaderboardRefresh();
+  if(leaderboardTimer)clearInterval(leaderboardTimer);
+  // Keep the live standings independent of page re-renders. Poll every 3 seconds
+  // while this player page is open; loadLeaderboard itself always fetches current
+  // server data and never relies on the previous DOM contents.
+  leaderboardTimer=setInterval(()=>{loadLeaderboard().catch(()=>{})},3000);
   setTimeout(refreshImages,100);
 }
 
@@ -193,9 +195,8 @@ async function resubmitBingo(){
   if(!window.confirm('Submit your current board for Bingo verification again? The new submission will receive a new server timestamp.'))return;
   try{
     const {data,error}=await sb.rpc('player_resubmit_bingo',{p_player_id:state.player.id});
-    if(error) throw error;
-    if(data?.error) throw new Error(data.error);
-    await loadState();render();toast(`🎉 Bingo resubmitted — ${data.bingo_pattern||state.player.first_bingo_pattern||'Row + Column'}`);
+    if(error)throw error;
+    await loadState();render();toast(`🎉 Bingo resubmitted — ${data?.bingo_pattern||state.player.first_bingo_pattern||'Row + Column'}`);
   }catch(e){toast(e.message||'Unable to resubmit Bingo.')}
 }
 async function resubmitBlackout(){
@@ -205,8 +206,7 @@ async function resubmitBlackout(){
   if(!window.confirm('Submit your current completed board for Blackout verification again? The new submission will receive a new server timestamp.'))return;
   try{
     const {data,error}=await sb.rpc('player_resubmit_blackout',{p_player_id:state.player.id});
-    if(error) throw error;
-    if(data?.error) throw new Error(data.error);
+    if(error)throw error;
     await loadState();render();toast('👑 Blackout resubmitted for organizer verification.');
   }catch(e){toast(e.message||'Unable to resubmit Blackout.')}
 }
@@ -219,7 +219,10 @@ async function loadLeaderboard(){
     // session, so this avoids a separate unauthenticated public action that
     // can fail with "Authentication required" when an older Edge Function is
     // still deployed.
-    const rows=await api('leaderboard');
+    // Force a fresh server read on every poll. The leaderboard is intentionally
+    // computed server-side from the current players/events tables, so no stale
+    // browser or intermediary response can make the standings appear frozen.
+    const rows=await api('leaderboard',{_refresh:Date.now()});
     const list=(Array.isArray(rows)?rows:[]).map(r=>{
       const bingo = r.bingo_status || (r.first_bingo_at ? (r.bingo_rejected ? 'rejected' : 'submitted') : 'pending');
       const blackout = r.blackout_status_public || (r.blackout_claimed_at ? (r.blackout_status==='approved' ? 'approved' : r.blackout_status==='rejected' ? 'rejected' : 'submitted') : 'pending');
