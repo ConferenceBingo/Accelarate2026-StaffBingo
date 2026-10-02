@@ -169,6 +169,22 @@ Deno.serve(async (req) => {
       return json(data)
     }
 
+    if (action === 'replace_photo') {
+      const playerId = String(body.player_id)
+      const squareIndex = Number(body.square_index)
+      const storagePath = String(body.storage_path || '')
+      if (!storagePath) return json({ error: 'storage_path required' }, 400)
+      const expectedPrefix = `${user.id}/${playerId}/`
+      if (!storagePath.startsWith(expectedPrefix)) return json({ error: 'Invalid photo path' }, 403)
+      const { data, error } = await userClient.rpc('replace_photo', {
+        p_player_id: playerId,
+        p_square_index: squareIndex,
+        p_photo_path: storagePath,
+      })
+      if (error) throw error
+      return json(data)
+    }
+
     if (action === 'leaderboard') {
       return json(await leaderboard())
     }
