@@ -161,12 +161,12 @@ function render(){
   document.getElementById('reload').onclick=()=>load();
   document.getElementById('logout').onclick=async()=>{authReady=false;await sb.auth.signOut();login()};document.getElementById('resetGame').onclick=resetGame;
   for(const id of ['open','pause','close'])document.getElementById(id).onclick=()=>control(id);
-  document.querySelectorAll('[data-verify]').forEach(b=>b.onclick=()=>verify(b.dataset.verify,b.dataset.approved==='true'));document.querySelectorAll('[data-bingo]').forEach(b=>b.onclick=()=>verifyBingo(b.dataset.bingo,b.dataset.rejected==='true'));document.querySelectorAll('[data-board]').forEach(b=>b.onclick=()=>viewBoard(b.dataset.board));
+  document.querySelectorAll('[data-verify]').forEach(b=>b.onclick=()=>verify(b.dataset.verify,b.dataset.approved==='true'));document.querySelectorAll('[data-bingo]').forEach(b=>b.onclick=()=>verifyBingo(b.dataset.bingo,b.dataset.rejected==='true'));document.querySelectorAll('[data-blackout-restore]').forEach(b=>b.onclick=()=>restoreBlackout(b.dataset.blackoutRestore));document.querySelectorAll('[data-board]').forEach(b=>b.onclick=()=>viewBoard(b.dataset.board));
 }
 
 function tablePlayers(rows){return `<table class="leader"><thead><tr><th>Player</th><th>Card</th><th>Progress</th><th>Bingo</th><th>Blackout</th><th></th></tr></thead><tbody>${rows.map(r=>`<tr><td>${esc(r.display_name)}</td><td>${r.card_number}</td><td>${r.completedCount??'—'} / 24</td><td>${r.first_bingo_at?(r.bingo_rejected?'<span class="pill" style="background:#fdecec;color:#8b1e1e">Rejected</span> '+fmt(r.first_bingo_at):fmt(r.first_bingo_at)):'—'}</td><td>${esc(r.blackout_status||'none')}</td><td><button class="btn btn-light" data-board="${r.id}">View Board</button></td></tr>`).join('')||'<tr><td colspan="6">No players yet.</td></tr>'}</tbody></table>`}
 function tableBingo(rows){return `<table class="leader"><thead><tr><th>#</th><th>Player</th><th>Card</th><th>Time</th><th>Pattern</th><th>Status</th><th></th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.display_name)}</td><td>${r.card_number}</td><td>${fmt(r.first_bingo_at)}</td><td>${esc(r.first_bingo_pattern||'')}</td><td>${r.bingo_rejected?'<span class="pill" style="background:#fdecec;color:#8b1e1e">Rejected</span>':'<span class="pill good">Active</span>'}</td><td><button class="btn ${r.bingo_rejected?'btn-light':'btn-danger'}" data-bingo="${r.id}" data-rejected="${r.bingo_rejected?'false':'true'}">${r.bingo_rejected?'Restore':'Reject Bingo'}</button></td></tr>`).join('')||'<tr><td colspan="7">No Bingo yet.</td></tr>'}</tbody></table>`}
-function tableBlackout(rows){const claims=rows.filter(r=>r.blackout_claimed_at).sort((a,b)=>new Date(a.blackout_claimed_at)-new Date(b.blackout_claimed_at));return `<table class="leader"><thead><tr><th>#</th><th>Player</th><th>Claim</th><th>Status</th></tr></thead><tbody>${claims.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.display_name)}</td><td>${fmt(r.blackout_claimed_at)}</td><td>${r.blackout_status}</td></tr>`).join('')||'<tr><td colspan="4">No Blackout claims yet.</td></tr>'}</tbody></table>`}
+function tableBlackout(rows){const claims=rows.filter(r=>r.blackout_claimed_at).sort((a,b)=>new Date(a.blackout_claimed_at)-new Date(b.blackout_claimed_at));return `<table class="leader"><thead><tr><th>#</th><th>Player</th><th>Claim</th><th>Status</th><th></th></tr></thead><tbody>${claims.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.display_name)}</td><td>${fmt(r.blackout_claimed_at)}</td><td>${r.blackout_status==='rejected'?'<span class="pill" style="background:#fdecec;color:#8b1e1e">Rejected</span>':esc(r.blackout_status)}</td><td>${r.blackout_status==='rejected'?`<button class="btn btn-light" data-blackout-restore="${r.id}">Restore</button>`:''}</td></tr>`).join('')||'<tr><td colspan="5">No Blackout claims yet.</td></tr>'}</tbody></table>`}
 function renderVerification(v){const defs=v.definitions||[];const sq=v.squares||[];const by=new Map(sq.map(x=>[x.square_index,x]));return `<article class="verify-card"><div class="row"><div class="grow"><b>${esc(v.player.display_name)}</b><div class="muted">Card #${v.player.card_number} • Claimed ${fmt(v.player.blackout_claimed_at)}</div></div><span class="pill warn">PENDING</span></div><div class="verify-board">${Array.from({length:25},(_,i)=>{const d=defs.find(x=>x.square_index===i);const s=by.get(i);const u=v.signedPhotoUrls?.[i];return d?.is_free?`<div class="empty" style="display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800">FREE</div>`:(u?`<img src="${u}" alt="${esc(d?.attendee_name)}">`:`<div class="empty" title="${esc(d?.attendee_name)}"></div>`)}).join('')}</div><div style="height:10px"></div><div class="small muted">Verification requires all 24 attendee squares to have valid selfies. The claim time is server-recorded.</div><div style="height:10px"></div><div class="row"><button class="btn btn-gold" data-verify="${v.player.id}" data-approved="true">✓ Approve Blackout</button><button class="btn btn-danger" data-verify="${v.player.id}" data-approved="false">Reject / Review</button></div></article>`}
 async function verifyBingo(id,rejected){
   let note=null;
@@ -178,6 +178,14 @@ async function verifyBingo(id,rejected){
     const {data,error}=await sb.rpc('admin_set_bingo_rejection',{p_player_id:id,p_rejected:rejected,p_note:note});
     if(error) throw error;
     toast(rejected?'Bingo rejected. The player will be notified.':'Bingo restored.');
+    await load();
+  }catch(e){toast(apiErrorMessage(e))}
+}
+async function restoreBlackout(id){
+  try{
+    const {data,error}=await sb.rpc('admin_restore_blackout',{p_player_id:id});
+    if(error)throw error;
+    toast('Blackout restored and returned to Pending verification.');
     await load();
   }catch(e){toast(apiErrorMessage(e))}
 }
