@@ -2,7 +2,7 @@ const cfg=window.ACCELARATE_CONFIG;
 const sb=supabase.createClient(cfg.SUPABASE_URL,cfg.SUPABASE_PUBLISHABLE_KEY,{auth:{persistSession:true,autoRefreshToken:true}});
 const root=document.getElementById('root');
 const toastEl=document.getElementById('toast');
-let session=null,state=null,uploading=false,selectedFile=null,selectedIndex=null,playerChannel=null;
+let session=null,state=null,uploading=false,selectedFile=null,selectedIndex=null,selectedReplacing=false,playerChannel=null;
 
 function toast(m){toastEl.textContent=m;toastEl.classList.remove('hidden');setTimeout(()=>toastEl.classList.add('hidden'),3200)}
 function escape(s){return String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
@@ -87,11 +87,16 @@ async function refreshImages(){for(const s of state.squares){if(s.photo_path){co
 
 function openPhotoChooser(index){
   if(uploading)return;
-  const s=state.squares[index];if(!s||s.completed||s.is_free)return;
-  selectedIndex=index;selectedFile=null;
+  const s=state.squares[index];if(!s||s.is_free)return;
+  if(s.completed){
+    const replace=window.confirm(`A photo is already saved for ${s.attendee_name}.\n\nDo you want to replace the saved photo?`);
+    if(!replace)return;
+  }
+  selectedIndex=index;selectedFile=null;selectedReplacing=!!s.completed;
+  const replacing=selectedReplacing;
   const label=escape(s.attendee_name);
   const modal=document.createElement('div');modal.className='modal';modal.id='photo-modal';modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');modal.setAttribute('aria-labelledby','photo-title');
-  modal.innerHTML=`<div class="modal-card"><h2 id="photo-title">Add selfie</h2><p class="modal-subtitle"><strong>${label}</strong><br><span class="muted">${escape(s.organization)}</span></p><p class="small">Choose how you want to add the photo. You can take a new selfie or select one from your photo library.</p><div class="choice-grid"><button id="take-photo" class="btn btn-primary choice-btn">📷 <span>Take Photo</span></button><button id="choose-photo" class="btn btn-light choice-btn">🖼️ <span>Choose from Photos</span></button></div><input id="camera-input" class="sr-only-file" type="file" accept="image/*" capture="user"><input id="library-input" class="sr-only-file" type="file" accept="image/*"><div id="preview-area" class="preview-area hidden"></div><div class="modal-actions"><button id="cancel-photo" class="btn btn-light">Cancel</button></div></div>`;
+  modal.innerHTML=`<div class="modal-card"><h2 id="photo-title">${replacing?'Replace selfie':'Add selfie'}</h2><p class="modal-subtitle"><strong>${label}</strong><br><span class="muted">${escape(s.organization)}</span></p><p class="small">${replacing?'Choose a new photo to replace the one currently saved.':'Choose how you want to add the photo. You can take a new selfie or select one from your photo library.'}</p><div class="choice-grid"><button id="take-photo" class="btn btn-primary choice-btn">📷 <span>Take Photo</span></button><button id="choose-photo" class="btn btn-light choice-btn">🖼️ <span>Choose from Photos</span></button></div><input id="camera-input" class="sr-only-file" type="file" accept="image/*" capture="user"><input id="library-input" class="sr-only-file" type="file" accept="image/*"><div id="preview-area" class="preview-area hidden"></div><div class="modal-actions"><button id="cancel-photo" class="btn btn-light">Cancel</button></div></div>`;
   document.body.appendChild(modal);
   const camera=document.getElementById('camera-input'),library=document.getElementById('library-input');
   document.getElementById('take-photo').onclick=()=>camera.click();
@@ -142,12 +147,12 @@ async function saveSelectedPhoto(){
       const retry=await sb.storage.from('selfies').upload(path,blob,{contentType:'image/jpeg',upsert:true});
       if(retry.error)throw retry.error;
     }
-    const result=await api('record_photo',{player_id:playerId,square_index:selectedIndex,storage_path:path});
+    const result=await api(selectedReplacing?'replace_photo':'record_photo',{player_id:playerId,square_index:selectedIndex,storage_path:path});
     closePhotoChooser();await loadState();render();
     if(result.bingo_achieved)toast(`🎉 BINGO! ${result.bingo_pattern}`);else if(result.blackout_achieved)toast('👑 BLACKOUT CLAIMED! Organizer verification is next.');else toast('Photo saved!');
   }catch(e){toast(e.message)}finally{uploading=false}
 }
-function closePhotoChooser(){const m=document.getElementById('photo-modal');if(m)m.remove();selectedFile=null;selectedIndex=null}
+function closePhotoChooser(){const m=document.getElementById('photo-modal');if(m)m.remove();selectedFile=null;selectedIndex=null;selectedReplacing=false}
 async function compress(file){const img=new Image();const url=URL.createObjectURL(file);await new Promise((res,rej)=>{img.onload=res;img.onerror=rej;img.src=url});const max=1200,scale=Math.min(1,max/Math.max(img.width,img.height));const c=document.createElement('canvas');c.width=Math.round(img.width*scale);c.height=Math.round(img.height*scale);c.getContext('2d').drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(url);return await new Promise(r=>c.toBlob(r,'image/jpeg',.82))}
 async function loadLeaderboard(){try{const rows=await api('leaderboard');const el=document.getElementById('leaderboard');if(!el)return;el.innerHTML=`<table class="leader"><thead><tr><th>Player</th><th>Bingo</th><th>Blackout</th></tr></thead><tbody>${rows.slice(0,15).map(r=>`<tr><td>${escape(r.display_name)} <span class="pill">Card ${r.card_number}</span></td><td>${r.first_bingo_at?(r.bingo_rejected?'⚠️ Rejected':new Date(r.first_bingo_at).toLocaleTimeString()):'—'}</td><td>${r.blackout_status==='approved'?'👑 Verified':r.blackout_claimed_at?'🟡 Pending':'—'}</td></tr>`).join('')}</tbody></table>`}catch(e){}}
 (async()=>{try{await ensureSession();if(await loadState()){render()}else intro()}catch(e){root.innerHTML=`<section class="panel danger">Unable to start the game: ${escape(e.message)}</section>`}})();
