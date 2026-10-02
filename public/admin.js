@@ -135,11 +135,23 @@ async function resetGame(){
   const claims=p.filter(x=>x.blackout_claimed_at).length;
   const typed=prompt(`RESET ENTIRE GAME?\n\nThis will permanently remove ${p.length} player(s), their selfie progress, Bingo/Blackout results, and game events.\n\nYour five Bingo cards, attendee list, game configuration, and organizer accounts will remain.\n\nType RESET to continue.`);
   if(typed!=='RESET'){if(typed!==null)toast('Reset cancelled. You must type RESET exactly.');return;}
+  // Pause the dashboard poll while reset is deleting player photos/rows.
+  // Otherwise a 3-second refresh can catch the database/storage in the middle
+  // of the reset and try to sign a photo that has just been removed.
+  stopDashboardAutoRefresh();
+  loading=true;
   try{
     const data=await api('admin_reset_game');
     toast(`Game reset. ${data?.players_removed??p.length} player(s) removed and ${data?.photos_removed??0} selfie file(s) removed.`);
-    await load();
-  }catch(e){toast(apiErrorMessage(e));}
+  }catch(e){
+    loading=false;
+    toast(apiErrorMessage(e));
+    // Resume normal live updates if the reset itself failed.
+    startDashboardAutoRefresh();
+    return;
+  }
+  loading=false;
+  await load();
 }
 
 function render(){
