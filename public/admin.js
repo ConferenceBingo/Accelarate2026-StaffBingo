@@ -148,11 +148,45 @@ function render(){
   const bingos=p.filter(x=>x.first_bingo_at).sort((a,b)=>new Date(a.first_bingo_at)-new Date(b.first_bingo_at));
   const approved=p.filter(x=>x.blackout_status==='approved').sort((a,b)=>new Date(a.blackout_verified_at)-new Date(b.blackout_verified_at));
   const winner=approved[0]||null;
-  root.innerHTML=`<section class="panel">${winner?`<div class="panel success" style="margin:0 0 12px;padding:14px"><b>👑 BLACKOUT GRAND PRIZE WINNER</b><div class="small">${esc(winner.display_name)} • Card #${winner.card_number} • verified ${fmt(winner.blackout_verified_at)}</div><div class="small">The first approved Blackout is locked as the Grand Prize winner. Later Blackout claims remain recorded but cannot replace the verified winner.</div></div>`:''}<div class="notice" style="margin-bottom:12px"><b>🎯 Competition rules:</b> BINGO = <strong>one full horizontal row AND one full vertical column</strong>. BLACKOUT = <strong>all 24 attendee squares</strong>; Free Space is automatic.</div><div class="row"><div class="grow"><b>Game status:</b> <span class="pill ${snapshot.game.status==='open'?'good':'warn'}">${snapshot.game.status.toUpperCase()}</span></div><button class="btn btn-light" id="reload">Refresh</button><button class="btn btn-light" id="logout">Sign out</button></div><div style="height:12px"></div><div class="stats"><div class="stat"><span class="muted">Players</span><b>${p.length}</b></div><div class="stat"><span class="muted">Bingos</span><b>${bingos.length}</b></div><div class="stat"><span class="muted">Blackout claims</span><b>${p.filter(x=>x.blackout_claimed_at).length}</b></div><div class="stat"><span class="muted">Verified</span><b>${approved.length}</b></div></div><div style="height:12px"></div><div class="row"><button class="btn btn-gold" id="open">Open Game</button><button class="btn btn-light" id="pause">Pause</button><button class="btn btn-danger" id="close">Close</button><button class="btn btn-danger" id="resetGame">↻ Reset Game</button></div></section><section class="panel"><h2>📋 Player Boards</h2><p class="muted">Open any player's board to inspect every completed square and view the submitted selfies.</p>${tablePlayers(p)}</section><div class="admin-grid"><section class="panel"><h2>👑 Blackout Verification</h2>${pending.length?pending.map(renderVerification).join(''):`<div class="notice">No pending Blackout claims.</div>`}</section><section><section class="panel"><h2>🏆 Bingo Race</h2>${tableBingo(bingos)}</section><section class="panel"><h2>👑 Blackout Race</h2>${tableBlackout(p)}</section></section></div>`;
+  root.innerHTML=`<section class="panel"><div id="winnerPanel">${winner?`<div class="panel success" style="margin:0 0 12px;padding:14px"><b>👑 BLACKOUT GRAND PRIZE WINNER</b><div class="small">${esc(winner.display_name)} • Card #${winner.card_number} • verified ${fmt(winner.blackout_verified_at)}</div><div class="small">The first approved Blackout is locked as the Grand Prize winner. Later Blackout claims remain recorded but cannot replace the verified winner.</div></div>`:''}</div><div class="notice" style="margin-bottom:12px"><b>🎯 Competition rules:</b> BINGO = <strong>one full horizontal row AND one full vertical column</strong>. BLACKOUT = <strong>all 24 attendee squares</strong>; Free Space is automatic.</div><div class="row"><div class="grow"><b>Game status:</b> <span id="gameStatus" class="pill ${snapshot.game.status==='open'?'good':'warn'}">${snapshot.game.status.toUpperCase()}</span></div><button class="btn btn-light" id="reload">Refresh</button><button class="btn btn-light" id="logout">Sign out</button></div><div style="height:12px"></div><div class="stats"><div class="stat"><span class="muted">Players</span><b id="statPlayers">${p.length}</b></div><div class="stat"><span class="muted">Bingos</span><b id="statBingos">${bingos.length}</b></div><div class="stat"><span class="muted">Blackout claims</span><b id="statClaims">${p.filter(x=>x.blackout_claimed_at).length}</b></div><div class="stat"><span class="muted">Verified</span><b id="statVerified">${approved.length}</b></div></div><div style="height:12px"></div><div class="row"><button class="btn btn-gold" id="open">Open Game</button><button class="btn btn-light" id="pause">Pause</button><button class="btn btn-danger" id="close">Close</button><button class="btn btn-danger" id="resetGame">↻ Reset Game</button></div></section><section class="panel"><h2>📋 Player Boards</h2><p class="muted">Open any player's board to inspect every completed square and view the submitted selfies.</p><div id="playerBoardsTable">${tablePlayers(p)}</div></section><div class="admin-grid"><section class="panel" id="blackoutVerificationPanel"><h2>👑 Blackout Verification</h2>${pending.length?pending.map(renderVerification).join(''):`<div class="notice">No pending Blackout claims.</div>`}</section><section><section class="panel"><h2>🏆 Bingo Race</h2><div id="bingoRaceTable">${tableBingo(bingos)}</div></section><section class="panel"><h2>👑 Blackout Race</h2><div id="blackoutRaceTable">${tableBlackout(p)}</div></section></section></div>`;
+  bindDashboardActions();
+}
+
+function bindDashboardActions(){
   document.getElementById('reload').onclick=()=>load();
-  document.getElementById('logout').onclick=async()=>{authReady=false;await sb.auth.signOut();login()};document.getElementById('resetGame').onclick=resetGame;
+  document.getElementById('logout').onclick=async()=>{authReady=false;await sb.auth.signOut();login()};
+  document.getElementById('resetGame').onclick=resetGame;
   for(const id of ['open','pause','close'])document.getElementById(id).onclick=()=>control(id);
-  document.querySelectorAll('[data-verify]').forEach(b=>b.onclick=()=>verify(b.dataset.verify,b.dataset.approved==='true'));document.querySelectorAll('[data-bingo]').forEach(b=>b.onclick=()=>verifyBingo(b.dataset.bingo,b.dataset.rejected==='true'));document.querySelectorAll('[data-bingo-restore]').forEach(b=>b.onclick=()=>restoreBingo(b.dataset.bingoRestore));document.querySelectorAll('[data-blackout-restore]').forEach(b=>b.onclick=()=>restoreBlackout(b.dataset.blackoutRestore));document.querySelectorAll('[data-board]').forEach(b=>b.onclick=()=>viewBoard(b.dataset.board));
+  document.querySelectorAll('[data-verify]').forEach(b=>b.onclick=()=>verify(b.dataset.verify,b.dataset.approved==='true'));
+  document.querySelectorAll('[data-bingo]').forEach(b=>b.onclick=()=>verifyBingo(b.dataset.bingo,b.dataset.rejected==='true'));
+  document.querySelectorAll('[data-bingo-restore]').forEach(b=>b.onclick=()=>restoreBingo(b.dataset.bingoRestore));
+  document.querySelectorAll('[data-blackout-restore]').forEach(b=>b.onclick=()=>restoreBlackout(b.dataset.blackoutRestore));
+  document.querySelectorAll('[data-board]').forEach(b=>b.onclick=()=>viewBoard(b.dataset.board));
+}
+
+function refreshLiveSections(){
+  const p=snapshot.players||[];
+  const bingos=p.filter(x=>x.first_bingo_at).sort((a,b)=>new Date(a.first_bingo_at)-new Date(b.first_bingo_at));
+  const approved=p.filter(x=>x.blackout_status==='approved').sort((a,b)=>new Date(a.blackout_verified_at)-new Date(b.blackout_verified_at));
+  const winner=approved[0]||null;
+  const gameStatus=document.getElementById('gameStatus');
+  if(gameStatus){gameStatus.className=`pill ${snapshot.game.status==='open'?'good':'warn'}`;gameStatus.textContent=snapshot.game.status.toUpperCase();}
+  const setText=(id,value)=>{const el=document.getElementById(id);if(el)el.textContent=String(value)};
+  setText('statPlayers',p.length);
+  setText('statBingos',bingos.length);
+  setText('statClaims',p.filter(x=>x.blackout_claimed_at).length);
+  setText('statVerified',approved.length);
+  const winnerPanel=document.getElementById('winnerPanel');
+  if(winnerPanel)winnerPanel.innerHTML=winner?`<div class="panel success" style="margin:0 0 12px;padding:14px"><b>👑 BLACKOUT GRAND PRIZE WINNER</b><div class="small">${esc(winner.display_name)} • Card #${winner.card_number} • verified ${fmt(winner.blackout_verified_at)}</div><div class="small">The first approved Blackout is locked as the Grand Prize winner. Later Blackout claims remain recorded but cannot replace the verified winner.</div></div>`:'';
+  const playersTable=document.getElementById('playerBoardsTable');if(playersTable)playersTable.innerHTML=tablePlayers(p);
+  const bingoTable=document.getElementById('bingoRaceTable');if(bingoTable)bingoTable.innerHTML=tableBingo(bingos);
+  const blackoutTable=document.getElementById('blackoutRaceTable');if(blackoutTable)blackoutTable.innerHTML=tableBlackout(p);
+  // Intentionally do NOT update #blackoutVerificationPanel here. The organizer's
+  // submitted-for-review cards stay in place until the organizer explicitly clicks Refresh.
+  document.querySelectorAll('[data-bingo]').forEach(b=>b.onclick=()=>verifyBingo(b.dataset.bingo,b.dataset.rejected==='true'));
+  document.querySelectorAll('[data-bingo-restore]').forEach(b=>b.onclick=()=>restoreBingo(b.dataset.bingoRestore));
+  document.querySelectorAll('[data-blackout-restore]').forEach(b=>b.onclick=()=>restoreBlackout(b.dataset.blackoutRestore));
+  document.querySelectorAll('[data-board]').forEach(b=>b.onclick=()=>viewBoard(b.dataset.board));
 }
 
 function statusPill(status){const s=String(status||'').toLowerCase();if(s==='approved')return '<span class="pill good">Approved</span>';if(s==='rejected')return '<span class="pill bad">Rejected</span>';if(s==='submitted')return '<span class="pill submitted">Submitted</span>';return '<span class="pill pending">Pending</span>'}
@@ -320,9 +354,13 @@ function startDashboardAutoRefresh(){
   if(dashboardTimer)clearInterval(dashboardTimer);
   dashboardTimer=setInterval(async()=>{
     if(document.visibilityState==='hidden' || loading) return;
-    const boardId=openBoardPlayerId;
-    const ok=await load();
-    if(ok && boardId && boardModal) await viewBoard(boardId);
+    try{
+      snapshot=await loadAdminSnapshotDirect();
+      refreshLiveSections();
+      if(openBoardPlayerId && boardModal) await viewBoard(openBoardPlayerId);
+    }catch(e){
+      toast(apiErrorMessage(e));
+    }
   },3000);
 }
 

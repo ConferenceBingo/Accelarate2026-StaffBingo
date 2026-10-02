@@ -1,3 +1,3 @@
 ACCELARATE 2026 Multiplayer Bingo
-Fresh install + Storage API reset fix
-Build: 20261002-fresh-install-storage-reset-fix1
+Fresh install + Storage API reset fix + static Blackout Verification
+Build: 20261002-blackout-static-fix1
