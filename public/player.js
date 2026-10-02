@@ -215,7 +215,13 @@ async function loadLeaderboard(){
   try{
     const rows=await api('leaderboard');
     const list=Array.isArray(rows)?rows:[];
-    el.innerHTML=`<div class="small muted" style="margin-bottom:6px">Live standings • updates automatically</div><table class="leader"><thead><tr><th>Player</th><th>Bingo</th><th>Blackout</th></tr></thead><tbody>${list.map(r=>`<tr><td>${escape(r.display_name)} <span class="pill">Card ${r.card_number}</span></td><td>${r.bingo_status==='approved'?'<span class="pill good">Approved</span>':r.bingo_status==='pending'?'<span class="pill warn">Pending</span>':'—'}</td><td>${r.blackout_status_public==='approved'?'<span class="pill good">Approved</span>':r.blackout_status_public==='pending'?'<span class="pill warn">Pending</span>':'—'}</td></tr>`).join('')||'<tr><td colspan="3">No players yet.</td></tr>'}</tbody></table>`;
+    const statusPill=(status)=>{
+      if(!status)return '—';
+      const cls=status==='approved'?'good':status==='rejected'?'bad':status==='submitted'?'submitted':'pending';
+      const label=status==='approved'?'Approved':status==='rejected'?'Rejected':status==='submitted'?'Submitted':'Pending';
+      return `<span class="pill ${cls}">${label}</span>`;
+    };
+    el.innerHTML=`<div class="small muted" style="margin-bottom:6px">Live standings • updates automatically</div><table class="leader"><thead><tr><th>Player</th><th>Bingo</th><th>Blackout</th></tr></thead><tbody>${list.map(r=>`<tr><td>${escape(r.display_name)} <span class="pill">Card ${r.card_number}</span></td><td>${statusPill(r.bingo_status)}</td><td>${statusPill(r.blackout_status_public)}</td></tr>`).join('')||'<tr><td colspan="3">No players yet.</td></tr>'}</tbody></table>`;
   }catch(e){
     console.error('Leaderboard refresh failed:',e);
     el.innerHTML=`<div class="notice">Leaderboard temporarily unavailable. Retrying automatically…</div>`;
