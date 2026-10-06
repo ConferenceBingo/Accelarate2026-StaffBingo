@@ -67,12 +67,12 @@ async function ensureSession({refresh=false}={}){
 }
 async function api(action,payload={}){
   let s=await ensureSession();
-  let r=await fetch(`${cfg.SUPABASE_URL}/functions/v1/game-api`,{method:'POST',headers:{'Content-Type':'application/json','Cache-Control':'no-cache','apikey':cfg.SUPABASE_PUBLISHABLE_KEY,'Authorization':`Bearer ${s.access_token}`},body:JSON.stringify({action,...payload})});
+  let r=await fetch(`${cfg.SUPABASE_URL}/functions/v1/game-api`,{method:'POST',headers:{'Content-Type':'application/json','apikey':cfg.SUPABASE_PUBLISHABLE_KEY,'Authorization':`Bearer ${s.access_token}`},body:JSON.stringify({action,...payload})});
   let j=null;try{j=await r.json()}catch{}
   // A stale anonymous access token can surface as a 401. Refresh the session once and retry.
   if(r.status===401){
     s=await ensureSession({refresh:true});
-    r=await fetch(`${cfg.SUPABASE_URL}/functions/v1/game-api`,{method:'POST',headers:{'Content-Type':'application/json','Cache-Control':'no-cache','apikey':cfg.SUPABASE_PUBLISHABLE_KEY,'Authorization':`Bearer ${s.access_token}`},body:JSON.stringify({action,...payload})});
+    r=await fetch(`${cfg.SUPABASE_URL}/functions/v1/game-api`,{method:'POST',headers:{'Content-Type':'application/json','apikey':cfg.SUPABASE_PUBLISHABLE_KEY,'Authorization':`Bearer ${s.access_token}`},body:JSON.stringify({action,...payload})});
     try{j=await r.json()}catch{}
   }
   if(!r.ok||j?.error){
