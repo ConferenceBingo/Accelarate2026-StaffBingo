@@ -2,9 +2,46 @@ const cfg=window.ACCELARATE_CONFIG;
 const sb=supabase.createClient(cfg.SUPABASE_URL,cfg.SUPABASE_PUBLISHABLE_KEY,{auth:{persistSession:true,autoRefreshToken:true}});
 const root=document.getElementById('root');
 const toastEl=document.getElementById('toast');
-let session=null,state=null,uploading=false,selectedFile=null,selectedIndex=null,selectedReplacing=false,playerChannel=null,leaderboardTimer=null;
+let session=null,state=null,uploading=false,selectedFile=null,selectedIndex=null,selectedReplacing=false,playerChannel=null,leaderboardTimer=null,lastDiagnostic=null;
 
 function toast(m){toastEl.textContent=m;toastEl.classList.remove('hidden');setTimeout(()=>toastEl.classList.add('hidden'),3200)}
+
+function errorDetails(e){
+  const x=e||{};
+  return {
+    name:x.name||'', message:x.message||String(x||''),
+    status:x.status??'', statusCode:x.statusCode??'', error:x.error??'',
+    code:x.code??'', cause:x.cause?.message||x.cause||'', stack:x.stack||''
+  };
+}
+function setDiagnostic(stage,e,extra={}){ lastDiagnostic={time:new Date().toISOString(),stage,error:errorDetails(e),...extra}; console.error('ACCELARATE PHOTO DIAGNOSTIC',lastDiagnostic); }
+function showDiagnostic(stage,e,extra={}){
+  setDiagnostic(stage,e,extra);
+  const d=lastDiagnostic, er=d.error||{};
+  const text=[
+    `Stage: ${d.stage}`,
+    `Time: ${d.time}`,
+    `Error name: ${er.name||'(none)'}`,
+    `Message: ${er.message||'(none)'}`,
+    er.status!==''?`HTTP status: ${er.status}`:'',
+    er.statusCode!==''?`Status code: ${er.statusCode}`:'',
+    er.error?`Supabase error: ${er.error}`:'',
+    er.code?`Code: ${er.code}`:'',
+    er.cause?`Cause: ${er.cause}`:'',
+    extra.action?`Action: ${extra.action}`:'',
+    extra.path?`Storage path: ${extra.path}`:'',
+    extra.responseStatus!=null?`Response status: ${extra.responseStatus}`:'',
+    extra.responseBody?`Response body: ${extra.responseBody}`:'',
+    `
+Please send this entire message to the organizer/technical support.`
+  ].filter(Boolean).join('\n');
+  const modal=document.createElement('div'); modal.className='modal'; modal.id='diagnostic-modal'; modal.setAttribute('role','alertdialog'); modal.setAttribute('aria-modal','true');
+  modal.innerHTML=`<div class="modal-card"><h2>Photo Upload Error</h2><p class="small">We captured the exact step that failed. Nothing else has been changed.</p><pre id="diagnostic-text" style="white-space:pre-wrap;word-break:break-word;max-height:45vh;overflow:auto;background:#f5f7fa;padding:12px;border-radius:8px;font-size:12px"></pre><div class="modal-actions"><button id="copy-diagnostic" class="btn btn-primary">Copy Error Details</button><button id="close-diagnostic" class="btn btn-light">Close</button></div></div>`;
+  document.body.appendChild(modal); document.getElementById('diagnostic-text').textContent=text;
+  document.getElementById('close-diagnostic').onclick=()=>modal.remove();
+  document.getElementById('copy-diagnostic').onclick=async()=>{try{await navigator.clipboard.writeText(text);toast('Error details copied.');}catch(_){toast('Select/copy the error details manually.')}};
+}
+
 function escape(s){return String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
 function cardTone(i){if(i===12)return 'free';const r=Math.floor(i/5),c=i%5;return ((r+c)%2===0)?'blue':'white'}
 
@@ -68,7 +105,7 @@ async function syncCanonicalGameStatus(){
     return false;
   }
 }
-async function loadState(){
+async function loadState({diagnostic=false}={}){
   const id=localStorage.getItem('acc_player_id');
   if(!id)return false;
   try{
@@ -90,6 +127,7 @@ async function loadState(){
       toast('Your saved game session expired. Please enter your name to rejoin.');
       return false;
     }
+    if(diagnostic){setDiagnostic('load-player-state',e,{online:navigator.onLine,browser:navigator.userAgent});throw e;}
     toast(msg);
     return false;
   }
@@ -183,37 +221,46 @@ async function handleChosenFile(file){
 
 async function saveSelectedPhoto(){
   if(!selectedFile||selectedIndex===null||uploading)return;
+  let stage='starting';
   try{
     uploading=true;
-    // Refresh the player's server state before uploading. If the organizer has closed/paused
-    // the game, stop here so the browser never attempts an RLS-protected upload that cannot be recorded.
-    await loadState();
-    if(!state){throw new Error('Your game session could not be restored. Tap Refresh and try again.')}
+    stage='load-player-state';
+    await loadState({diagnostic:true});
+    if(!state)throw new Error('Your game session could not be restored. Tap Refresh and try again.');
+    stage='check-game-status';
     await syncCanonicalGameStatus();
     if(state.game_status!=='open'){
-      closePhotoChooser();
-      render();
+      closePhotoChooser(); render();
       toast('The game is currently closed/paused. Your progress is saved. Tap Refresh after the organizer reopens it.');
       return;
     }
+    stage='authenticate';
     await ensureSession({refresh:true});
     toast('Uploading photo…');
+    stage='compress-image';
     const blob=await compress(selectedFile);
+    if(!blob)throw new Error('The browser could not create a JPEG from the selected photo.');
     const user=(await sb.auth.getUser()).data.user;
     if(!user)throw new Error('Your game session expired. Tap Refresh and try again.');
     const playerId=state.player.id;
     const path=`${user.id}/${playerId}/${selectedIndex}.jpg`;
+    stage='storage-upload';
     const up=await sb.storage.from('selfies').upload(path,blob,{contentType:'image/jpeg',upsert:true});
     if(up.error){
-      // Refresh the auth session once if storage rejects a stale session, then retry the upload.
+      setDiagnostic(stage,up.error,{path,uploadBytes:blob.size,uploadType:blob.type,upsert:true});
+      stage='storage-upload-retry';
       await ensureSession({refresh:true});
       const retry=await sb.storage.from('selfies').upload(path,blob,{contentType:'image/jpeg',upsert:true});
       if(retry.error)throw retry.error;
     }
+    stage='record-photo';
     const result=await api(selectedReplacing?'replace_photo':'record_photo',{player_id:playerId,square_index:selectedIndex,storage_path:path});
+    stage='refresh-board';
     closePhotoChooser();await loadState();render();
     if(result.bingo_achieved)toast(`🎉 BINGO! ${result.bingo_pattern}`);else if(result.blackout_achieved)toast('👑 BLACKOUT CLAIMED! Organizer verification is next.');else toast('Photo saved!');
-  }catch(e){toast(e.message)}finally{uploading=false}
+  }catch(e){
+    showDiagnostic(stage,e,{action:selectedReplacing?'replace_photo':'record_photo',online:navigator.onLine,browser:navigator.userAgent,fileName:selectedFile?.name||'',fileType:selectedFile?.type||'',fileBytes:selectedFile?.size||0});
+  }finally{uploading=false}
 }
 function closePhotoChooser(){const m=document.getElementById('photo-modal');if(m)m.remove();selectedFile=null;selectedIndex=null;selectedReplacing=false}
 async function compress(file){const img=new Image();const url=URL.createObjectURL(file);await new Promise((res,rej)=>{img.onload=res;img.onerror=rej;img.src=url});const max=1200,scale=Math.min(1,max/Math.max(img.width,img.height));const c=document.createElement('canvas');c.width=Math.round(img.width*scale);c.height=Math.round(img.height*scale);c.getContext('2d').drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(url);return await new Promise(r=>c.toBlob(r,'image/jpeg',.82))}

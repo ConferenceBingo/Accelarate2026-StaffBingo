@@ -1,3 +1,5 @@
 ACCELARATE 2026 Multiplayer Bingo
-Known-working photo upload rollback + Storage API reset + stable reset polling
-Build: 20261006-known-working-photo-upload-rollback1
+Known-working upload path + PHOTO DIAGNOSTIC BUILD
+Build: 20261006-photo-diagnostic1
+
+This build does not change the upload architecture. It exposes the exact stage and browser/Supabase error when photo upload fails.
