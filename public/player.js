@@ -158,7 +158,7 @@ function openPhotoChooser(index){
   const replacing=selectedReplacing;
   const label=escape(s.attendee_name);
   const modal=document.createElement('div');modal.className='modal';modal.id='photo-modal';modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');modal.setAttribute('aria-labelledby','photo-title');
-  modal.innerHTML=`<div class="modal-card"><h2 id="photo-title">${replacing?'Replace selfie':'Add selfie'}</h2><p class="modal-subtitle"><strong>${label}</strong><br><span class="muted">${escape(s.organization)}</span></p><p class="small">${replacing?'Choose a new photo to replace the one currently saved.':'Choose how you want to add the photo. You can take a new selfie or select one from your photo library.'}</p><div class="choice-grid"><button id="take-photo" class="btn btn-primary choice-btn">📷 <span>Take Photo</span></button><button id="choose-photo" class="btn btn-light choice-btn">🖼️ <span>Choose from Photos</span></button></div><input id="camera-input" class="sr-only-file" type="file" accept="image/jpeg,image/png,image/webp" capture="user"><input id="library-input" class="sr-only-file" type="file" accept="image/jpeg,image/png,image/webp"><div id="preview-area" class="preview-area hidden"></div><div class="modal-actions"><button id="cancel-photo" class="btn btn-light">Cancel</button></div></div>`;
+  modal.innerHTML=`<div class="modal-card"><h2 id="photo-title">${replacing?'Replace selfie':'Add selfie'}</h2><p class="modal-subtitle"><strong>${label}</strong><br><span class="muted">${escape(s.organization)}</span></p><p class="small">${replacing?'Choose a new photo to replace the one currently saved.':'Choose how you want to add the photo. You can take a new selfie or select one from your photo library.'}</p><div class="choice-grid"><button id="take-photo" class="btn btn-primary choice-btn">📷 <span>Take Photo</span></button><button id="choose-photo" class="btn btn-light choice-btn">🖼️ <span>Choose from Photos</span></button></div><input id="camera-input" class="sr-only-file" type="file" accept="image/*" capture="user"><input id="library-input" class="sr-only-file" type="file" accept="image/*"><div id="preview-area" class="preview-area hidden"></div><div class="modal-actions"><button id="cancel-photo" class="btn btn-light">Cancel</button></div></div>`;
   document.body.appendChild(modal);
   const camera=document.getElementById('camera-input'),library=document.getElementById('library-input');
   document.getElementById('take-photo').onclick=()=>camera.click();
@@ -171,94 +171,52 @@ function openPhotoChooser(index){
 
 async function handleChosenFile(file){
   if(!file)return;
-  const type=(file.type||'').toLowerCase();
-  if(!['image/jpeg','image/png','image/webp'].includes(type)){
-    toast('Please choose a JPEG, PNG, or WebP photo. If using an iPhone, choose Camera or a compatible photo from Photos.');
-    return;
-  }
+  if(!file.type.startsWith('image/')){toast('Please choose an image.');return}
   selectedFile=file;
   const previewArea=document.getElementById('preview-area');if(!previewArea)return;
   const url=URL.createObjectURL(file);
   previewArea.classList.remove('hidden');
-  previewArea.innerHTML=`<img id="selected-photo-preview" src="${url}" alt="Selected selfie preview"><div class="small">Does this photo show you with the attendee?</div><div class="preview-actions"><button id="use-photo" class="btn btn-primary">✓ Use This Photo</button><button id="retake-photo" class="btn btn-light">Choose Again</button></div>`;
-  const previewImg=document.getElementById('selected-photo-preview');
-  previewImg.onerror=()=>{
-    URL.revokeObjectURL(url);
-    selectedFile=null;
-    previewArea.innerHTML=`<div class="small">This photo could not be read by the browser. Please choose a JPEG or PNG photo instead.</div><div class="preview-actions"><button id="retry-photo" class="btn btn-light">Choose Again</button></div>`;
-    document.getElementById('retry-photo').onclick=()=>{previewArea.classList.add('hidden');previewArea.innerHTML=''};
-    toast('Image could not be loaded. Please choose a JPEG or PNG photo.');
-  };
+  previewArea.innerHTML=`<img src="${url}" alt="Selected selfie preview"><div class="small">Does this photo show you with the attendee?</div><div class="preview-actions"><button id="use-photo" class="btn btn-primary">✓ Use This Photo</button><button id="retake-photo" class="btn btn-light">Choose Again</button></div>`;
   document.getElementById('use-photo').onclick=()=>saveSelectedPhoto();
-  document.getElementById('retake-photo').onclick=()=>{URL.revokeObjectURL(url);previewArea.classList.add('hidden');previewArea.innerHTML='';selectedFile=null};
+  document.getElementById('retake-photo').onclick=()=>{previewArea.classList.add('hidden');previewArea.innerHTML='';selectedFile=null};
 }
 
 async function saveSelectedPhoto(){
   if(!selectedFile||selectedIndex===null||uploading)return;
   try{
     uploading=true;
-    if(!state?.player?.id)throw new Error('Your game session could not be restored. Tap Refresh and try again.');
+    // Refresh the player's server state before uploading. If the organizer has closed/paused
+    // the game, stop here so the browser never attempts an RLS-protected upload that cannot be recorded.
+    await loadState();
+    if(!state){throw new Error('Your game session could not be restored. Tap Refresh and try again.')}
+    await syncCanonicalGameStatus();
     if(state.game_status!=='open'){
       closePhotoChooser();
       render();
       toast('The game is currently closed/paused. Your progress is saved. Tap Refresh after the organizer reopens it.');
       return;
     }
-
-    // Do not force an auth refresh or reload the whole board during an upload.
-    // Those extra network requests can surface browser-level "Load failed"
-    // errors even when the existing player session is valid.
-    await ensureSession();
+    await ensureSession({refresh:true});
     toast('Uploading photo…');
     const blob=await compress(selectedFile);
-    const user=session?.user;
+    const user=(await sb.auth.getUser()).data.user;
     if(!user)throw new Error('Your game session expired. Tap Refresh and try again.');
     const playerId=state.player.id;
     const path=`${user.id}/${playerId}/${selectedIndex}.jpg`;
-    // Generate a short-lived signed upload token through our Edge Function.
-    // This avoids the browser needing to perform the Storage INSERT directly
-    // with its anonymous-session RLS context, while keeping the service key
-    // completely server-side. Supabase supports uploading with this token via
-    // uploadToSignedUrl().
-    const uploadAuth=await api('create_photo_upload',{player_id:playerId,square_index:selectedIndex,storage_path:path});
-    if(!uploadAuth?.token)throw new Error('The server did not provide a photo upload token.');
-    const {error:uploadError}=await sb.storage.from('selfies').uploadToSignedUrl(path,uploadAuth.token,blob,{contentType:'image/jpeg',cacheControl:'3600'});
-    if(uploadError){
-      const detail=uploadError.message||uploadError.error||String(uploadError);
-      throw new Error(`Photo upload failed at Storage: ${detail}`);
+    const up=await sb.storage.from('selfies').upload(path,blob,{contentType:'image/jpeg',upsert:true});
+    if(up.error){
+      // Refresh the auth session once if storage rejects a stale session, then retry the upload.
+      await ensureSession({refresh:true});
+      const retry=await sb.storage.from('selfies').upload(path,blob,{contentType:'image/jpeg',upsert:true});
+      if(retry.error)throw retry.error;
     }
-
     const result=await api(selectedReplacing?'replace_photo':'record_photo',{player_id:playerId,square_index:selectedIndex,storage_path:path});
-    closePhotoChooser();
-    await loadState();
-    render();
+    closePhotoChooser();await loadState();render();
     if(result.bingo_achieved)toast(`🎉 BINGO! ${result.bingo_pattern}`);else if(result.blackout_achieved)toast('👑 BLACKOUT CLAIMED! Organizer verification is next.');else toast('Photo saved!');
-  }catch(e){
-    console.error('Photo upload error:',e);
-    toast(e?.message||'Photo upload failed. Please try again.');
-  }finally{uploading=false}
+  }catch(e){toast(e.message)}finally{uploading=false}
 }
 function closePhotoChooser(){const m=document.getElementById('photo-modal');if(m)m.remove();selectedFile=null;selectedIndex=null;selectedReplacing=false}
-async function compress(file){
-  const img=new Image();
-  const url=URL.createObjectURL(file);
-  try{
-    await new Promise((res,rej)=>{
-      img.onload=res;
-      img.onerror=()=>rej(new Error('This image format could not be decoded by the browser. Please choose a JPEG or PNG photo.'));
-      img.src=url;
-    });
-    const max=1200,scale=Math.min(1,max/Math.max(img.width,img.height));
-    const c=document.createElement('canvas');
-    c.width=Math.max(1,Math.round(img.width*scale));
-    c.height=Math.max(1,Math.round(img.height*scale));
-    const ctx=c.getContext('2d');
-    if(!ctx)throw new Error('Unable to process the photo. Please try another image.');
-    ctx.drawImage(img,0,0,c.width,c.height);
-    const blob=await new Promise((res,rej)=>c.toBlob(b=>b?res(b):rej(new Error('Unable to prepare the photo for upload. Please try another image.')),'image/jpeg',.82));
-    return blob;
-  }finally{URL.revokeObjectURL(url)}
-}
+async function compress(file){const img=new Image();const url=URL.createObjectURL(file);await new Promise((res,rej)=>{img.onload=res;img.onerror=rej;img.src=url});const max=1200,scale=Math.min(1,max/Math.max(img.width,img.height));const c=document.createElement('canvas');c.width=Math.round(img.width*scale);c.height=Math.round(img.height*scale);c.getContext('2d').drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(url);return await new Promise(r=>c.toBlob(r,'image/jpeg',.82))}
 
 async function resubmitBingo(){
   if(uploading)return;
