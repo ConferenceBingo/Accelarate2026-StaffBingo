@@ -197,35 +197,48 @@ async function saveSelectedPhoto(){
   if(!selectedFile||selectedIndex===null||uploading)return;
   try{
     uploading=true;
-    // Refresh the player's server state before uploading. If the organizer has closed/paused
-    // the game, stop here so the browser never attempts an RLS-protected upload that cannot be recorded.
-    await loadState();
-    if(!state){throw new Error('Your game session could not be restored. Tap Refresh and try again.')}
-    await syncCanonicalGameStatus();
+    if(!state?.player?.id)throw new Error('Your game session could not be restored. Tap Refresh and try again.');
     if(state.game_status!=='open'){
       closePhotoChooser();
       render();
       toast('The game is currently closed/paused. Your progress is saved. Tap Refresh after the organizer reopens it.');
       return;
     }
-    await ensureSession({refresh:true});
+
+    // Do not force an auth refresh or reload the whole board during an upload.
+    // Those extra network requests can surface browser-level "Load failed"
+    // errors even when the existing player session is valid.
+    await ensureSession();
     toast('Uploading photo…');
     const blob=await compress(selectedFile);
-    const user=(await sb.auth.getUser()).data.user;
+    const user=session?.user;
     if(!user)throw new Error('Your game session expired. Tap Refresh and try again.');
     const playerId=state.player.id;
     const path=`${user.id}/${playerId}/${selectedIndex}.jpg`;
-    const up=await sb.storage.from('selfies').upload(path,blob,{contentType:'image/jpeg',upsert:true});
-    if(up.error){
-      // Refresh the auth session once if storage rejects a stale session, then retry the upload.
-      await ensureSession({refresh:true});
-      const retry=await sb.storage.from('selfies').upload(path,blob,{contentType:'image/jpeg',upsert:true});
-      if(retry.error)throw retry.error;
+    const storage=sb.storage.from('selfies');
+
+    // New photos use a normal INSERT. For replacements, remove the old object
+    // first so we do not require an UPDATE policy merely to use upsert=true.
+    // This matches the Storage policy installed by the fresh-install SQL.
+    if(selectedReplacing){
+      const {error:removeError}=await storage.remove([path]);
+      if(removeError)throw new Error(`Unable to replace the existing photo: ${removeError.message||removeError}`);
     }
+    const {error:uploadError}=await storage.upload(path,blob,{contentType:'image/jpeg',cacheControl:'3600',upsert:false});
+    if(uploadError){
+      const detail=uploadError.message||uploadError.error||String(uploadError);
+      throw new Error(`Photo upload failed: ${detail}`);
+    }
+
     const result=await api(selectedReplacing?'replace_photo':'record_photo',{player_id:playerId,square_index:selectedIndex,storage_path:path});
-    closePhotoChooser();await loadState();render();
+    closePhotoChooser();
+    await loadState();
+    render();
     if(result.bingo_achieved)toast(`🎉 BINGO! ${result.bingo_pattern}`);else if(result.blackout_achieved)toast('👑 BLACKOUT CLAIMED! Organizer verification is next.');else toast('Photo saved!');
-  }catch(e){toast(e.message)}finally{uploading=false}
+  }catch(e){
+    console.error('Photo upload error:',e);
+    toast(e?.message||'Photo upload failed. Please try again.');
+  }finally{uploading=false}
 }
 function closePhotoChooser(){const m=document.getElementById('photo-modal');if(m)m.remove();selectedFile=null;selectedIndex=null;selectedReplacing=false}
 async function compress(file){
