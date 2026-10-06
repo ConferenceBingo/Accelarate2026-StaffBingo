@@ -215,19 +215,17 @@ async function saveSelectedPhoto(){
     if(!user)throw new Error('Your game session expired. Tap Refresh and try again.');
     const playerId=state.player.id;
     const path=`${user.id}/${playerId}/${selectedIndex}.jpg`;
-    const storage=sb.storage.from('selfies');
-
-    // New photos use a normal INSERT. For replacements, remove the old object
-    // first so we do not require an UPDATE policy merely to use upsert=true.
-    // This matches the Storage policy installed by the fresh-install SQL.
-    if(selectedReplacing){
-      const {error:removeError}=await storage.remove([path]);
-      if(removeError)throw new Error(`Unable to replace the existing photo: ${removeError.message||removeError}`);
-    }
-    const {error:uploadError}=await storage.upload(path,blob,{contentType:'image/jpeg',cacheControl:'3600',upsert:false});
+    // Generate a short-lived signed upload token through our Edge Function.
+    // This avoids the browser needing to perform the Storage INSERT directly
+    // with its anonymous-session RLS context, while keeping the service key
+    // completely server-side. Supabase supports uploading with this token via
+    // uploadToSignedUrl().
+    const uploadAuth=await api('create_photo_upload',{player_id:playerId,square_index:selectedIndex,storage_path:path});
+    if(!uploadAuth?.token)throw new Error('The server did not provide a photo upload token.');
+    const {error:uploadError}=await sb.storage.from('selfies').uploadToSignedUrl(path,uploadAuth.token,blob,{contentType:'image/jpeg',cacheControl:'3600'});
     if(uploadError){
       const detail=uploadError.message||uploadError.error||String(uploadError);
-      throw new Error(`Photo upload failed: ${detail}`);
+      throw new Error(`Photo upload failed at Storage: ${detail}`);
     }
 
     const result=await api(selectedReplacing?'replace_photo':'record_photo',{player_id:playerId,square_index:selectedIndex,storage_path:path});
